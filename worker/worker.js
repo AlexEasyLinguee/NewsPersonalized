@@ -48,17 +48,17 @@ let cachedModel = null;
 async function pickModel(env) {
   if (env.MODEL) return env.MODEL;
   if (cachedModel) return cachedModel;
-  const res = await fetch(`${GEMINI}/models?pageSize=200`, { headers: { 'x-goog-api-key': env.GEMINI_API_KEY } });
+  const res = await fetch(`${GEMINI}/models?pageSize=200`, { headers: { 'x-goog-api-key': env.GEMINI_API_KEY }, signal: AbortSignal.timeout(10000) });
   if (!res.ok) throw new Error(`Clé Gemini refusée (HTTP ${res.status})`);
   const names = ((await res.json()).models || [])
     .filter((m) => (m.supportedGenerationMethods || []).includes('generateContent'))
     .map((m) => m.name.replace('models/', ''))
     .filter((n) => /^gemini-[\d.]+-flash(-lite)?$/.test(n));
   const ver = (n) => parseFloat(n.split('-')[1]);
-  // Ici on préfère Flash (plus fin) : une seule requête par profil.
+  // Flash-Lite : rapide, gratuit, et largement suffisant pour structurer un profil.
   const flash = names.filter((n) => !n.endsWith('-lite')).sort((a, b) => ver(b) - ver(a));
   const lite = names.filter((n) => n.endsWith('-lite')).sort((a, b) => ver(b) - ver(a));
-  cachedModel = flash[0] || lite[0];
+  cachedModel = lite[0] || flash[0];
   if (!cachedModel) throw new Error('Aucun modèle Gemini disponible');
   return cachedModel;
 }
@@ -109,6 +109,7 @@ export default {
           response_format: { type: 'json_object' },
           messages: [{ role: 'system', content: SYSTEM }, { role: 'user', content: text }],
         }),
+        signal: AbortSignal.timeout(25000),
       });
       if (res.status === 429) return json({ error: 'L’IA est très sollicitée, réessaie dans une minute.' }, 429, origin);
       if (!res.ok) return json({ error: `L’IA a répondu une erreur (${res.status}).` }, 502, origin);
@@ -117,7 +118,8 @@ export default {
       const profile = cleanProfile(JSON.parse(content.replace(/^```(json)?|```$/g, '').trim()));
       return json({ profile }, 200, origin);
     } catch (e) {
-      return json({ error: `Impossible de créer le profil : ${e.message}` }, 502, origin);
+      const msg = e.name === 'TimeoutError' ? 'l\u2019IA met trop de temps à répondre, réessaie.' : e.message;
+      return json({ error: `Impossible de créer le profil : ${msg}` }, 502, origin);
     }
   },
 };

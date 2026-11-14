@@ -334,13 +334,13 @@ $('#profil-body').addEventListener('click', async (e) => {
     b.disabled = true;
     b.textContent = 'L\u2019IA lit ton texte…';
     try {
-      const res = await fetch(WORKER_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) });
+      const res = await fetch(WORKER_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }), signal: AbortSignal.timeout(45000) });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.profile) throw new Error(data.error || `Erreur ${res.status}`);
       draft = data.profile;
       renderDraft();
     } catch (err) {
-      renderProfileForm(err.message || 'Impossible de joindre l\u2019IA.');
+      renderProfileForm(err.name === 'TimeoutError' ? 'L\u2019IA ne répond pas pour l\u2019instant, réessaie dans un moment.' : err.message || 'Impossible de joindre l\u2019IA.');
     }
     return;
   }
