@@ -77,6 +77,32 @@ export function matchGroups(item, groups) {
   }));
 }
 
+// --- Doublons : la même histoire racontée par plusieurs médias ---
+const STOP = new Set(('les des une pour par sur dans avec aux est sont qui que ses son leur plus apres avant entre lors face sans sous vers chez cette ces mais elle ils nous vous tout tous toute pas comme encore deja '
+  + 'the and for with from that this into over after amid says said new will has have are was its their about than').split(' '));
+const sigCache = new WeakMap();
+function signature(item) {
+  if (!sigCache.has(item)) {
+    const set = new Set(words([item.title, ...(item.tags || []), ...(item.places || [])].join(' '))
+      .trim().split(' ').filter((w) => w.length >= 3 && !STOP.has(w)));
+    sigCache.set(item, set);
+  }
+  return sigCache.get(item);
+}
+export function sameStory(a, b) {
+  const A = signature(a), B = signature(b);
+  let shared = 0;
+  for (const w of A) if (B.has(w)) shared++;
+  return shared >= 3 && shared / Math.min(A.size, B.size) >= 0.45;
+}
+// Garde une seule version de chaque histoire : la plus importante, de préférence avec photo.
+export function dedupe(items) {
+  const sorted = [...items].sort((a, b) => b.importance - a.importance || (b.image ? 1 : 0) - (a.image ? 1 : 0));
+  const kept = [];
+  for (const i of sorted) if (!kept.some((k) => sameStory(k, i))) kept.push(i);
+  return kept;
+}
+
 export function themeOf(category) {
   return THEMES.some((t) => t.id === category) ? category : 'autre';
 }
@@ -102,7 +128,7 @@ export function followedReason(item, s) {
 
 export function select(edition, s) {
   const avoided = (i) => i.importance < 9 && matchGroups(i, s.avoid).length > 0;
-  const items = (edition.items || []).filter((i) => !i.fait_divers && !avoided(i));
+  const items = dedupe((edition.items || []).filter((i) => !i.fait_divers && !avoided(i)));
   const threshold = s.level === 'full' ? 6 : 8;
 
   // 1. L'essentiel : infos graves ou neutres, seulement si elles comptent vraiment.
