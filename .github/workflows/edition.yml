@@ -9,7 +9,6 @@ on:
 
 permissions:
   contents: read
-  models: read      # accès gratuit à GitHub Models via le jeton intégré
   pages: write
   id-token: write
 
@@ -32,7 +31,7 @@ jobs:
       - name: Récupérer et trier les actus
         run: node scripts/build.mjs
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

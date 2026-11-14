@@ -11,11 +11,13 @@ const SOURCES = JSON.parse(await fs.readFile(new URL('sources.json', ROOT), 'utf
 const MAX_AGE_HOURS = 30;     // on ne garde que les articles récents
 const PER_SOURCE = 15;        // max d'articles lus par source
 const MAX_ITEMS = 240;        // plafond total envoyé à l'IA (limites de l'offre gratuite)
-const BATCH = 12;             // articles par requête IA
+const BATCH = 20;             // articles par requête IA
 const PAUSE_MS = 4500;        // pause entre deux requêtes IA
-const MODEL = process.env.MODEL || 'openai/gpt-4.1-mini';
-const ENDPOINT = process.env.AI_ENDPOINT || 'https://models.github.ai/inference/chat/completions';
-const TOKEN = process.env.AI_TOKEN || process.env.GITHUB_TOKEN;
+// IA : Google Gemini, offre gratuite (clé dans le secret GEMINI_API_KEY du dépôt).
+const GEMINI = 'https://generativelanguage.googleapis.com/v1beta';
+const ENDPOINT = `${GEMINI}/openai/chat/completions`;
+const TOKEN = process.env.GEMINI_API_KEY;
+let MODEL = process.env.MODEL || '';
 
 export const CATEGORIES = ['inventions', 'sante', 'ia', 'espace', 'ecologie', 'animaux', 'reportages', 'sourires', 'monde', 'aviation', 'autre'];
 
@@ -32,6 +34,8 @@ function txt(v) {
 
 function strip(html) {
   return html
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
     .replace(/<[^>]*>/g, ' ')
     .replace(/&nbsp;/g, ' ')
     .replace(/&amp;/g, '&')
@@ -55,7 +59,7 @@ function findImage(it) {
     for (const m of arr(g?.['media:content'])) if (m?.['@_url']) return m['@_url'];
   }
   const html = txt(it['content:encoded']) + txt(it.description) + txt(it.content) + txt(it.summary);
-  const m = html.match(/<img[^>]+src=["']([^"']+)["']/i);
+  const m = html.replace(/&lt;/g, '<').replace(/&quot;/g, '"').match(/<img[^>]+src=["']([^"']+)["']/i);
   return m ? m[1] : null;
 }
 
@@ -70,9 +74,12 @@ function linkOf(it) {
 }
 
 const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@_', textNodeName: '#text' });
+// Certains flux (The Guardian) dépassent la limite d'entités du parseur : on les lit sans décodage.
+const rawParser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@_', textNodeName: '#text', processEntities: false });
 
 export function parseFeed(xml, src) {
-  const doc = parser.parse(xml);
+  let doc;
+  try { doc = parser.parse(xml); } catch { doc = rawParser.parse(xml); }
   const raw = arr(doc?.rss?.channel?.item).concat(arr(doc?.feed?.entry), arr(doc?.['rdf:RDF']?.item));
   const now = Date.now();
   const out = [];
@@ -104,7 +111,7 @@ async function fetchSource(src) {
   }
   try {
     const res = await fetch(src.url, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; NewsPersonalized/1.0)', Accept: 'application/rss+xml, application/xml, text/xml, */*' },
+      headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Safari/537.36', Accept: 'application/rss+xml, application/xml, text/xml, */*' },
       signal: AbortSignal.timeout(20000),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -128,6 +135,22 @@ Pour chaque article reçu, renvoie un objet avec :
 - "title_fr" : titre clair et factuel en français, sans sensationnalisme, 90 caractères max.
 - "summary_fr" : résumé en français en une ou deux phrases (220 caractères max), qui dit pourquoi c'est intéressant ou important. N'invente aucun fait absent de l'article.
 Réponds uniquement en JSON : {"items": [ ... ]}.`;
+
+// Choisit automatiquement le meilleur modèle gratuit disponible (Flash-Lite, sinon Flash).
+async function pickModel() {
+  if (MODEL || process.env.MOCK_AI) return;
+  const res = await fetch(`${GEMINI}/models?pageSize=200`, { headers: { 'x-goog-api-key': TOKEN } });
+  if (!res.ok) throw new Error(`Clé Gemini refusée (HTTP ${res.status}) : ${(await res.text()).slice(0, 200)}`);
+  const names = ((await res.json()).models || [])
+    .filter((m) => (m.supportedGenerationMethods || []).includes('generateContent'))
+    .map((m) => m.name.replace('models/', ''))
+    .filter((n) => /^gemini-[\d.]+-flash(-lite)?$/.test(n));
+  const ver = (n) => parseFloat(n.split('-')[1]);
+  const lite = names.filter((n) => n.endsWith('-lite')).sort((a, b) => ver(b) - ver(a));
+  const flash = names.filter((n) => !n.endsWith('-lite')).sort((a, b) => ver(b) - ver(a));
+  MODEL = lite[0] || flash[0];
+  if (!MODEL) throw new Error('Aucun modèle Gemini Flash disponible pour cette clé.');
+}
 
 async function callModel(batch) {
   if (process.env.MOCK_AI) return mockScore(batch);
@@ -154,7 +177,9 @@ async function callModel(batch) {
       continue;
     }
     if (!res.ok) throw new Error(`IA HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
-    const data = await res.json();
+    const raw = await res.text();
+    let data;
+    try { data = JSON.parse(raw); } catch { throw new Error(`Réponse IA illisible : ${raw.slice(0, 200)}`); }
     const content = data.choices?.[0]?.message?.content || '{}';
     const json = JSON.parse(content.replace(/^```(json)?|```$/g, '').trim());
     return arr(json.items);
@@ -197,7 +222,8 @@ function clean(r, src) {
 }
 
 async function main() {
-  if (!TOKEN && !process.env.MOCK_AI) throw new Error('Aucun jeton pour l\'IA (GITHUB_TOKEN manquant).');
+  if (!TOKEN && !process.env.MOCK_AI) throw new Error('Secret GEMINI_API_KEY manquant : ajoute ta clé Gemini dans Settings › Secrets and variables › Actions.');
+  await pickModel();
 
   const lists = await Promise.all(SOURCES.map(fetchSource));
   // On alterne les sources pour qu'aucune ne monopolise le plafond.
