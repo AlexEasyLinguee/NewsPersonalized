@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Clair</title>
+<meta name="theme-color" content="#F6F7F4">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Clair">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="icon" href="icon-180.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;700&family=Manrope:wght@400;500;600;700&display=swap">
+<style>
+  :root {
+    --ground: #F6F7F4; --ink: #14201C; --muted: #5B6661; --card: #FFFFFF; --line: #E6EAE7;
+    --green: #0B6E53; --green-soft: #DDF2E9; --amber: #8A4500; --amber-soft: #FFEED9;
+    --blue: #1A4F9C; --blue-soft: #E3ECFA;
+    --dark: #0F1D19; --dark-2: #1C312B; --mint: #9FE0C6; --dark-muted: #B7C7C0;
+    --tabs-h: calc(64px + env(safe-area-inset-bottom));
+    --display: 'Bricolage Grotesque', system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--ground); color: var(--ink); font-family: 'Manrope', system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+  body.dark { background: var(--dark); }
+  button { font-family: inherit; }
+  a { color: var(--green); }
+  .screen { display: none; min-height: 100%; padding-bottom: var(--tabs-h); }
+  .screen.active { display: block; }
+  .wrap { max-width: 520px; margin: 0 auto; }
+  .hidden { display: none !important; }
+
+  /* L'essentiel */
+  header.top { padding: calc(20px + env(safe-area-inset-top)) 24px 16px; display: flex; flex-direction: column; gap: 4px; }
+  .brand-row { display: flex; justify-content: space-between; align-items: center; }
+  .brand { font-family: var(--display); font-weight: 700; font-size: 22px; color: var(--green); }
+  .date { margin: 10px 0 0; font-size: 14px; font-weight: 600; color: var(--muted); }
+  h1 { margin: 0; font-family: var(--display); font-weight: 700; font-size: 36px; line-height: 1.05; }
+  .sub { margin: 0; font-size: 15px; color: var(--muted); }
+  .list { padding: 0 16px; display: flex; flex-direction: column; gap: 10px; }
+  .card { background: var(--card); border-radius: 16px; padding: 14px 16px; display: flex; flex-direction: column; gap: 6px; text-decoration: none; color: inherit; }
+  .card h2 { margin: 0; font-size: 17px; line-height: 1.3; font-weight: 700; }
+  .card p { margin: 0; font-size: 14px; line-height: 1.45; color: var(--muted); }
+  .chips { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .chip { font-size: 12px; font-weight: 700; padding: 3px 9px; border-radius: 999px; }
+  .chip.important { color: var(--amber); background: var(--amber-soft); }
+  .chip.good { color: var(--green); background: var(--green-soft); }
+  .chip.world { color: var(--blue); background: var(--blue-soft); }
+  .reason { font-size: 12px; font-weight: 600; color: var(--muted); }
+  .cta { margin: 16px; height: 56px; border-radius: 16px; border: none; background: var(--green); color: #fff; display: flex; align-items: center; justify-content: center; gap: 10px; font-size: 16px; font-weight: 700; cursor: pointer; width: calc(100% - 32px); }
+  .empty { margin: 24px; padding: 20px; border-radius: 16px; background: var(--card); color: var(--muted); line-height: 1.5; }
+  .stale { margin: 0 16px 10px; padding: 10px 14px; border-radius: 12px; background: var(--amber-soft); color: var(--amber); font-size: 13px; font-weight: 600; }
+
+  /* Le fil */
+  #fil { padding-bottom: 0; }
+  .feed { position: fixed; inset: 0 0 var(--tabs-h) 0; overflow-y: auto; scroll-snap-type: y mandatory; overscroll-behavior: contain; color: #fff; }
+  .feed-head { position: fixed; top: 0; left: 0; right: 0; z-index: 5; padding: calc(12px + env(safe-area-inset-top)) 16px 10px; background: linear-gradient(var(--dark) 60%, transparent); pointer-events: none; }
+  .feed-head .inner { max-width: 520px; margin: 0 auto; display: flex; flex-direction: column; gap: 10px; }
+  .progress { display: flex; gap: 3px; }
+  .progress i { flex: 1; height: 3px; border-radius: 2px; background: #2A3F39; }
+  .progress i.done { background: var(--mint); }
+  .head-row { display: flex; justify-content: space-between; align-items: center; }
+  .chip.mint { color: var(--dark); background: var(--mint); }
+  .counter { font-size: 13px; font-weight: 600; color: var(--dark-muted); }
+  .slide { height: 100%; scroll-snap-align: start; scroll-snap-stop: always; display: flex; flex-direction: column; padding: calc(64px + env(safe-area-inset-top)) 16px 12px; max-width: 520px; margin: 0 auto; }
+  .media { flex: 1 1 auto; min-height: 140px; border-radius: 22px; background: #24413A; overflow: hidden; display: flex; align-items: center; justify-content: center; color: #CFE3DA; }
+  .media img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .slide-body { padding: 16px 4px 6px; display: flex; flex-direction: column; gap: 8px; }
+  .slide h2 { margin: 0; font-family: var(--display); font-weight: 700; font-size: 24px; line-height: 1.15; }
+  .slide p { margin: 0; font-size: 15px; line-height: 1.45; color: #C9D6D0; }
+  .slide .meta { font-size: 13px; color: var(--dark-muted); }
+  .slide .meta a { color: var(--mint); }
+  .actions { display: flex; gap: 6px; padding-top: 6px; flex-wrap: wrap; }
+  .icon-btn { width: 44px; height: 44px; border-radius: 22px; border: none; background: var(--dark-2); color: #fff; display: flex; align-items: center; justify-content: center; cursor: pointer; }
+  .icon-btn.on { background: var(--mint); color: var(--dark); }
+  .pill-btn { height: 44px; padding: 0 14px; border-radius: 22px; border: none; background: var(--dark-2); color: #C9D6D0; font-size: 13px; font-weight: 600; cursor: pointer; }
+
+  /* Fin */
+  .end { justify-content: center; align-items: center; text-align: center; gap: 14px; padding-left: 24px; padding-right: 24px; background: var(--ground); color: var(--ink); max-width: none; }
+  .end > * { max-width: 420px; width: 100%; }
+  .check { width: 88px; height: 88px; border-radius: 44px; background: var(--green-soft); color: var(--green); display: flex; align-items: center; justify-content: center; }
+  .end h2 { font-size: 38px; color: var(--ink); }
+  .end p { color: var(--muted); font-size: 16px; line-height: 1.5; }
+  .stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 10px; }
+  .stat { background: var(--card); border-radius: 14px; padding: 14px 8px; display: flex; flex-direction: column; gap: 2px; }
+  .stat b { font-family: var(--display); font-size: 26px; }
+  .stat span { font-size: 12px; color: var(--muted); }
+  .note { background: var(--card); border-radius: 14px; padding: 14px 16px; display: flex; align-items: center; gap: 12px; text-align: left; font-size: 14px; }
+  .outline-btn { height: 52px; border-radius: 16px; border: 1.5px solid #C9D2CE; background: transparent; color: var(--ink); font-size: 15px; font-weight: 700; cursor: pointer; }
+
+  /* Réglages */
+  .settings { padding: calc(20px + env(safe-area-inset-top)) 20px 28px; display: flex; flex-direction: column; gap: 22px; }
+  .settings h1 { font-size: 30px; }
+  .settings h2 { margin: 0 0 10px; font-size: 15px; font-weight: 700; }
+  .settings .hint { margin: -4px 0 10px; font-size: 13px; color: var(--muted); }
+  .seg { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; background: var(--line); padding: 4px; border-radius: 14px; }
+  .seg button { height: 44px; border: none; border-radius: 11px; font-size: 14px; font-weight: 700; cursor: pointer; background: transparent; color: #4A5550; }
+  .seg button[aria-pressed="true"] { background: #fff; color: var(--green); }
+  .desc { margin: 10px 0 0; font-size: 14px; line-height: 1.45; color: var(--muted); }
+  .tags { display: flex; flex-wrap: wrap; gap: 8px; }
+  .tag { height: 36px; padding: 0 6px 0 14px; border-radius: 18px; background: #fff; display: flex; align-items: center; gap: 4px; font-size: 14px; font-weight: 600; }
+  .tag button { width: 28px; height: 28px; border: none; background: transparent; color: var(--muted); font-size: 16px; cursor: pointer; border-radius: 14px; }
+  .add-row { display: flex; gap: 8px; margin-top: 10px; }
+  .add-row input { flex: 1; height: 44px; border-radius: 12px; border: 1.5px solid #D7DDDA; padding: 0 12px; font: inherit; font-size: 15px; background: #fff; min-width: 0; }
+  .add-row button { height: 44px; padding: 0 16px; border-radius: 12px; border: none; background: var(--green); color: #fff; font-weight: 700; cursor: pointer; }
+  .grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .toggle { min-height: 44px; padding: 8px 12px; border-radius: 12px; font-size: 13px; font-weight: 700; text-align: left; line-height: 1.25; cursor: pointer; border: 1.5px solid #D7DDDA; background: #fff; color: #4A5550; }
+  .toggle[aria-pressed="true"] { border-color: var(--green); background: var(--green-soft); color: #08523E; }
+  .count-row { display: flex; justify-content: space-between; align-items: center; background: #fff; border-radius: 14px; padding: 10px 10px 10px 16px; }
+  .count-row .btns { display: flex; gap: 6px; }
+  .round { width: 44px; height: 44px; border-radius: 22px; border: none; background: var(--line); color: var(--ink); font-size: 20px; font-weight: 700; cursor: pointer; }
+  .small { font-size: 12px; color: var(--muted); }
+
+  /* Barre d'onglets */
+  nav.tabs { position: fixed; left: 0; right: 0; bottom: 0; height: var(--tabs-h); padding-bottom: env(safe-area-inset-bottom); background: var(--ground); border-top: 1px solid var(--line); display: flex; justify-content: space-around; z-index: 10; }
+  nav.tabs button { flex: 1; max-width: 140px; border: none; background: none; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; font-size: 12px; font-weight: 600; color: var(--muted); cursor: pointer; }
+  nav.tabs button[aria-current="page"] { color: var(--green); font-weight: 700; }
+  body.dark nav.tabs { background: var(--dark); border-top-color: #1F3530; }
+  body.dark nav.tabs button { color: var(--dark-muted); }
+  body.dark nav.tabs button[aria-current="page"] { color: var(--mint); }
+
+  .toast { position: fixed; left: 50%; bottom: calc(var(--tabs-h) + 16px); transform: translateX(-50%); background: var(--ink); color: #fff; padding: 10px 16px; border-radius: 12px; font-size: 14px; font-weight: 600; z-index: 20; max-width: 90vw; text-align: center; }
+</style>
+</head>
+<body>
+
+<main>
+  <section id="essentiel" class="screen active" aria-label="L'essentiel">
+    <div class="wrap">
+      <header class="top">
+        <div class="brand-row"><span class="brand">Clair</span></div>
+        <p class="date" id="ess-date"></p>
+        <h1>L'essentiel</h1>
+        <p class="sub" id="ess-sub">Chargement…</p>
+      </header>
+      <div id="ess-stale"></div>
+      <div class="list" id="ess-list"></div>
+      <button class="cta" id="go-fil" type="button"></button>
+    </div>
+  </section>
+
+  <section id="fil" class="screen" aria-label="Le fil">
+    <div class="feed-head" aria-hidden="true">
+      <div class="inner">
+        <div class="progress" id="progress"></div>
+        <div class="head-row"><span class="chip mint" id="fil-cat"></span><span class="counter" id="fil-counter"></span></div>
+      </div>
+    </div>
+    <div class="feed" id="feed"></div>
+  </section>
+
+  <section id="reglages" class="screen" aria-label="Mon dosage">
+    <div class="wrap settings" id="settings"></div>
+  </section>
+
+  <section id="favoris" class="screen" aria-label="Mes favoris">
+    <div class="wrap">
+      <header class="top"><h1>Mes favoris</h1><p class="sub">Les cartes que tu as gardées.</p></header>
+      <div class="list" id="fav-list"></div>
+    </div>
+  </section>
+</main>
+
+<nav class="tabs" aria-label="Navigation">
+  <button type="button" data-tab="essentiel" aria-current="page">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M5 6h14M5 12h14M5 18h9"/></svg>L'essentiel</button>
+  <button type="button" data-tab="fil">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="3" width="12" height="18" rx="3"/></svg>Le fil</button>
+  <button type="button" data-tab="favoris">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M6 3h12v18l-6-4-6 4z"/></svg>Favoris</button>
+  <button type="button" data-tab="reglages">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>Mon dosage</button>
+</nav>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,248 @@
+// Construit l'édition du jour : récupère les flux RSS, fait noter chaque article
+// par une IA (importance + ton + thème), puis écrit docs/edition.json.
+// L'app (docs/index.html) applique ensuite TES réglages (dosage, lieux, thèmes).
+
+import { XMLParser } from 'fast-xml-parser';
+import fs from 'node:fs/promises';
+
+const ROOT = new URL('..', import.meta.url);
+const SOURCES = JSON.parse(await fs.readFile(new URL('sources.json', ROOT), 'utf8'));
+
+const MAX_AGE_HOURS = 30;     // on ne garde que les articles récents
+const PER_SOURCE = 15;        // max d'articles lus par source
+const MAX_ITEMS = 240;        // plafond total envoyé à l'IA (limites de l'offre gratuite)
+const BATCH = 12;             // articles par requête IA
+const PAUSE_MS = 4500;        // pause entre deux requêtes IA
+const MODEL = process.env.MODEL || 'openai/gpt-4.1-mini';
+const ENDPOINT = process.env.AI_ENDPOINT || 'https://models.github.ai/inference/chat/completions';
+const TOKEN = process.env.AI_TOKEN || process.env.GITHUB_TOKEN;
+
+export const CATEGORIES = ['inventions', 'sante', 'ia', 'espace', 'ecologie', 'animaux', 'reportages', 'sourires', 'monde', 'aviation', 'autre'];
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const arr = (v) => (v == null ? [] : Array.isArray(v) ? v : [v]);
+
+function txt(v) {
+  if (v == null) return '';
+  if (typeof v === 'string' || typeof v === 'number') return String(v);
+  if (Array.isArray(v)) return txt(v[0]);
+  if (typeof v === 'object') return txt(v['#text'] ?? '');
+  return '';
+}
+
+function strip(html) {
+  return html
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#0?39;|&rsquo;|&lsquo;/g, "'")
+    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n)))
+    .replace(/&[a-z]+;/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function findImage(it) {
+  for (const k of ['media:content', 'media:thumbnail', 'enclosure']) {
+    for (const m of arr(it[k])) {
+      const u = m?.['@_url'];
+      const t = m?.['@_type'] || '';
+      if (u && (!t || t.startsWith('image'))) return u;
+    }
+  }
+  for (const g of arr(it['media:group'])) {
+    for (const m of arr(g?.['media:content'])) if (m?.['@_url']) return m['@_url'];
+  }
+  const html = txt(it['content:encoded']) + txt(it.description) + txt(it.content) + txt(it.summary);
+  const m = html.match(/<img[^>]+src=["']([^"']+)["']/i);
+  return m ? m[1] : null;
+}
+
+function linkOf(it) {
+  const l = it.link;
+  if (typeof l === 'string') return l;
+  for (const x of arr(l)) {
+    if (typeof x === 'string') return x;
+    if (x?.['@_href'] && (!x['@_rel'] || x['@_rel'] === 'alternate')) return x['@_href'];
+  }
+  return txt(it.guid);
+}
+
+const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@_', textNodeName: '#text' });
+
+export function parseFeed(xml, src) {
+  const doc = parser.parse(xml);
+  const raw = arr(doc?.rss?.channel?.item).concat(arr(doc?.feed?.entry), arr(doc?.['rdf:RDF']?.item));
+  const now = Date.now();
+  const out = [];
+  for (const it of raw) {
+    const title = strip(txt(it.title));
+    const url = linkOf(it);
+    if (!title || !url) continue;
+    const dateStr = txt(it.pubDate) || txt(it.published) || txt(it.updated) || txt(it['dc:date']);
+    const published = dateStr ? new Date(dateStr) : null;
+    if (published && !isNaN(published) && now - published.getTime() > MAX_AGE_HOURS * 3600e3) continue;
+    const desc = strip(txt(it.description) || txt(it.summary) || txt(it['content:encoded']) || txt(it.content)).slice(0, 300);
+    out.push({
+      title,
+      desc,
+      url,
+      image: findImage(it),
+      published: published && !isNaN(published) ? published.toISOString() : null,
+      source: src.name,
+    });
+    if (out.length >= PER_SOURCE) break;
+  }
+  return out;
+}
+
+async function fetchSource(src) {
+  if (process.env.FIXTURE_DIR) {
+    const file = new URL(`${process.env.FIXTURE_DIR}/${encodeURIComponent(src.name)}.xml`, 'file://');
+    try { return parseFeed(await fs.readFile(file, 'utf8'), src); } catch { return []; }
+  }
+  try {
+    const res = await fetch(src.url, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; NewsPersonalized/1.0)', Accept: 'application/rss+xml, application/xml, text/xml, */*' },
+      signal: AbortSignal.timeout(20000),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const items = parseFeed(await res.text(), src);
+    console.log(`✓ ${src.name}: ${items.length}`);
+    return items;
+  } catch (e) {
+    console.log(`✗ ${src.name}: ${e.message}`);
+    return [];
+  }
+}
+
+const SYSTEM = `Tu tries l'actualité pour une app d'infos qui met en avant les bonnes nouvelles sans cacher l'essentiel.
+Pour chaque article reçu, renvoie un objet avec :
+- "id" : l'id reçu
+- "importance" : entier 0-10. 10 = événement historique mondial. 8-9 = info mondiale majeure que tout le monde devrait connaître (catastrophe naturelle de grande ampleur, crash d'avion de ligne, escalade d'une guerre, élection majeure, découverte scientifique majeure). 5-7 = info significative à l'échelle d'un pays ou d'une région. 0-4 = info mineure, locale, anecdotique. 0 = publicité, bon plan, contenu promotionnel.
+- "tone" : "positive" (progrès, découverte, solution, invention utile, réussite écologique, histoire humaine qui fait du bien, belle nature), "neutral" (information factuelle sans charge négative, ex. un lancement de fusée, une annonce d'IA), ou "negative" (drame, conflit, crise, catastrophe, polémique).
+- "category" : un seul parmi ${CATEGORIES.join(', ')}. inventions = inventions et innovations qui améliorent le monde ; sante = santé et médecine ; ia = intelligence artificielle ; espace = spatial, astronomie, SpaceX/Starship ; ecologie = climat, énergie, environnement ; animaux = animaux et nature ; reportages = beaux reportages, culture, voyages ; sourires = histoires humaines touchantes ; monde = politique et géopolitique internationale ; aviation = aviation et transport aérien ; autre = le reste.
+- "fait_divers" : true pour les faits divers (crime local, petit accident, people, sport, faits isolés sans portée générale), sinon false.
+- "places" : liste des pays, régions ou villes principalement concernés, en français (ex. ["Bali", "Indonésie"]). Liste vide si aucun.
+- "title_fr" : titre clair et factuel en français, sans sensationnalisme, 90 caractères max.
+- "summary_fr" : résumé en français en une ou deux phrases (220 caractères max), qui dit pourquoi c'est intéressant ou important. N'invente aucun fait absent de l'article.
+Réponds uniquement en JSON : {"items": [ ... ]}.`;
+
+async function callModel(batch) {
+  if (process.env.MOCK_AI) return mockScore(batch);
+  const body = {
+    model: MODEL,
+    temperature: 0.2,
+    response_format: { type: 'json_object' },
+    messages: [
+      { role: 'system', content: SYSTEM },
+      { role: 'user', content: JSON.stringify(batch.map((b) => ({ id: b.id, source: b.source, title: b.title, desc: b.desc }))) },
+    ],
+  };
+  for (let attempt = 1; attempt <= 4; attempt++) {
+    const res = await fetch(ENDPOINT, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(90000),
+    });
+    if (res.status === 429 || res.status >= 500) {
+      const wait = Math.min(90, Number(res.headers.get('retry-after')) || 20 * attempt);
+      console.log(`  IA occupée (${res.status}), nouvel essai dans ${wait}s`);
+      await sleep(wait * 1000);
+      continue;
+    }
+    if (!res.ok) throw new Error(`IA HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
+    const data = await res.json();
+    const content = data.choices?.[0]?.message?.content || '{}';
+    const json = JSON.parse(content.replace(/^```(json)?|```$/g, '').trim());
+    return arr(json.items);
+  }
+  throw new Error('IA indisponible après 4 essais');
+}
+
+// Notation factice, uniquement pour tester l'app sans IA (MOCK_AI=1).
+function mockScore(batch) {
+  return batch.map((b, i) => ({
+    id: b.id,
+    importance: (b.id * 7) % 11,
+    tone: ['positive', 'positive', 'neutral', 'negative'][b.id % 4],
+    category: CATEGORIES[b.id % CATEGORIES.length],
+    fait_divers: b.id % 9 === 0,
+    places: b.id % 5 === 0 ? ['Bali', 'Indonésie'] : [],
+    title_fr: b.title,
+    summary_fr: b.desc.slice(0, 200),
+  }));
+}
+
+function clean(r, src) {
+  const imp = Math.max(0, Math.min(10, Math.round(Number(r.importance) || 0)));
+  const tone = ['positive', 'neutral', 'negative'].includes(r.tone) ? r.tone : 'neutral';
+  const category = CATEGORIES.includes(r.category) ? r.category : 'autre';
+  return {
+    id: src.id,
+    title: String(r.title_fr || src.title).slice(0, 140),
+    summary: String(r.summary_fr || src.desc).slice(0, 300),
+    url: src.url,
+    image: src.image,
+    source: src.source,
+    published: src.published,
+    importance: imp,
+    tone,
+    category,
+    fait_divers: Boolean(r.fait_divers),
+    places: arr(r.places).map(String).slice(0, 6),
+  };
+}
+
+async function main() {
+  if (!TOKEN && !process.env.MOCK_AI) throw new Error('Aucun jeton pour l\'IA (GITHUB_TOKEN manquant).');
+
+  const lists = await Promise.all(SOURCES.map(fetchSource));
+  // On alterne les sources pour qu'aucune ne monopolise le plafond.
+  const merged = [];
+  for (let i = 0; i < PER_SOURCE; i++) for (const l of lists) if (l[i]) merged.push(l[i]);
+
+  const seen = new Set();
+  const items = [];
+  for (const it of merged) {
+    const key = it.title.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 50);
+    if (seen.has(key) || seen.has(it.url)) continue;
+    seen.add(key); seen.add(it.url);
+    items.push({ ...it, id: items.length + 1 });
+    if (items.length >= MAX_ITEMS) break;
+  }
+  console.log(`\n${items.length} articles à noter avec ${MODEL}`);
+  if (!items.length) throw new Error('Aucun article récupéré.');
+
+  const byId = new Map(items.map((i) => [i.id, i]));
+  const scored = [];
+  let failures = 0;
+  for (let i = 0; i < items.length; i += BATCH) {
+    const batch = items.slice(i, i + BATCH);
+    try {
+      const results = await callModel(batch);
+      for (const r of results) {
+        const src = byId.get(Number(r.id));
+        if (src) scored.push(clean(r, src));
+      }
+      console.log(`  lot ${i / BATCH + 1}: ${results.length} notés`);
+    } catch (e) {
+      failures++;
+      console.log(`  lot ${i / BATCH + 1} ignoré: ${e.message}`);
+    }
+    if (!process.env.MOCK_AI) await sleep(PAUSE_MS);
+  }
+  if (!scored.length) throw new Error(`Aucun article noté (${failures} lots en échec).`);
+
+  const kept = scored.filter((s) => s.importance > 0).sort((a, b) => b.importance - a.importance);
+  const edition = { generated_at: new Date().toISOString(), model: MODEL, count: kept.length, items: kept };
+  await fs.mkdir(new URL('docs/', ROOT), { recursive: true });
+  await fs.writeFile(new URL('docs/edition.json', ROOT), JSON.stringify(edition));
+  console.log(`\nÉdition écrite : ${kept.length} articles (${failures} lots en échec).`);
+}
+
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch((e) => { console.error(e.message); process.exit(1); });
+}
