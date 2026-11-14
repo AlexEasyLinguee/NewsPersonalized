@@ -357,7 +357,9 @@ $('#profil-body').addEventListener('click', async (e) => {
       places: draft.places,
       keep_informed: draft.keep_informed,
       avoid: draft.avoid,
-      themes: draft.themes && draft.themes.length ? [...new Set([...draft.themes, 'autre'])] : settings.themes,
+      // Tous les thèmes restent ouverts : les centres d'intérêt font remonter ce qui compte,
+      // et chacun peut fermer un thème dans Mon dosage.
+      themes: THEMES.map((t) => t.id),
       topics: [...new Set(['monde', ...(draft.topics || [])])],
       level: draft.level,
       resume: draft.resume,
