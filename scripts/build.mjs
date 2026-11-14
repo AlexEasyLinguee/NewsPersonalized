@@ -248,7 +248,9 @@ async function main() {
   for (let i = 0; i < items.length; i += BATCH) {
     const batch = items.slice(i, i + BATCH);
     try {
-      const results = await callModel(batch);
+      let results;
+      try { results = await callModel(batch); }
+      catch (e) { console.log(`  lot ${i / BATCH + 1} : nouvel essai (${e.message.slice(0, 80)})`); await sleep(PAUSE_MS); results = await callModel(batch); }
       for (const r of results) {
         const src = byId.get(Number(r.id));
         if (src) scored.push(clean(r, src));
