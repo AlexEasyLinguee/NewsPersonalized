@@ -33,3 +33,13 @@ Coût : 0 €. GitHub Actions, GitHub Pages et l'API Gemini (modèles Flash-Lite
 npm install
 MOCK_AI=1 node scripts/build.mjs   # notes factices, pour vérifier l'affichage
 ```
+
+## Profils personnalisés (« Parle-moi de toi »)
+
+Au premier lancement, chaque personne décrit ce qu'elle aime ; l'IA en fait un profil (intérêts, lieux, sujets à suivre même s'ils sont graves, sujets à éviter, dosage), gardé uniquement sur son téléphone.
+
+L'IA est appelée via un petit relais Cloudflare (`worker/worker.js`) pour que la clé Gemini ne soit jamais dans l'app :
+
+1. Cloudflare › Workers & Pages › Create › Hello World › Deploy, puis **Edit code** : coller `worker/worker.js` et **Deploy**.
+2. Settings du Worker › Variables and Secrets › Add › type **Secret**, nom `GEMINI_API_KEY`, valeur = ta clé Gemini.
+3. Copier l'adresse du Worker (`https://xxx.workers.dev`) dans `docs/config.js` (`WORKER_URL`).

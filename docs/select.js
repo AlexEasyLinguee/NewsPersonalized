@@ -1,4 +1,4 @@
-// Logique de sélection : applique tes réglages à l'édition du jour.
+// Logique de sélection : applique le profil et les réglages à l'édition du jour.
 // Fichier sans dépendance, utilisé par l'app (et testable avec Node).
 
 export const THEMES = [
@@ -10,6 +10,10 @@ export const THEMES = [
   { id: 'animaux', label: 'Animaux et nature' },
   { id: 'reportages', label: 'Beaux reportages' },
   { id: 'sourires', label: 'Histoires qui font sourire' },
+  { id: 'sport', label: 'Sport' },
+  { id: 'culture', label: 'Culture, arts et gastronomie' },
+  { id: 'tech', label: 'Technologie' },
+  { id: 'economie', label: 'Économie et entreprises' },
   { id: 'autre', label: 'Autres bonnes nouvelles' },
 ];
 
@@ -22,6 +26,10 @@ export const CATEGORY_LABELS = {
   animaux: 'Animaux et nature',
   reportages: 'Reportage',
   sourires: 'Histoire qui fait sourire',
+  sport: 'Sport',
+  culture: 'Culture',
+  tech: 'Technologie',
+  economie: 'Économie',
   monde: 'Monde',
   aviation: 'Aviation',
   autre: 'Actualité',
@@ -33,37 +41,68 @@ export const LEVELS = [
   { id: 'full', label: 'Complet', desc: 'Toute l’actualité importante, bonne ou mauvaise, toujours sans faits divers.' },
 ];
 
+// Réglages neutres d'un nouveau profil (le texte « Parle-moi de toi » les remplit).
 export const DEFAULT_SETTINGS = {
   level: 'eq',
-  places: ['Bali', 'Indonésie', 'Népal', 'France'],
-  topics: ['aviation'],
+  places: [],
+  topics: ['monde'],
   themes: THEMES.map((t) => t.id),
   count: 20,
+  interests: [],      // [{label, keywords[]}]
+  keep_informed: [],  // [{label, keywords[]}] : à savoir même si c'est grave
+  avoid: [],          // [{label, keywords[]}] : à ne plus voir
+  resume: '',
+  profileText: '',
 };
 
 // Catégories qui méritent leur place dans le fil même quand le ton est neutre
 // (ex. un lancement de Starship, une annonce sur l'IA).
-const NEUTRAL_OK = ['inventions', 'sante', 'ia', 'espace', 'ecologie', 'animaux', 'reportages'];
+const NEUTRAL_OK = ['inventions', 'sante', 'ia', 'espace', 'ecologie', 'animaux', 'reportages', 'culture', 'tech', 'sport'];
 
-export const norm = (s) => String(s).normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
+export const norm = (s) => String(s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
+const words = (s) => ` ${norm(s).replace(/[^a-z0-9]+/g, ' ').trim()} `;
+
+const textCache = new WeakMap();
+function textOf(item) {
+  if (!textCache.has(item)) textCache.set(item, words([...(item.tags || []), item.title, item.summary].join(' ')));
+  return textCache.get(item);
+}
+
+// Groupes (intérêts, à suivre, à éviter) dont un mot-clé apparaît dans l'article.
+export function matchGroups(item, groups) {
+  const t = textOf(item);
+  return (groups || []).filter((g) => (g.keywords || []).some((k) => {
+    const kw = words(k);
+    return kw.trim() && t.includes(kw);
+  }));
+}
 
 export function themeOf(category) {
   return THEMES.some((t) => t.id === category) ? category : 'autre';
 }
 
-// Renvoie le lieu ou le sujet suivi qui concerne cette info, ou null.
-export function followedReason(item, s) {
-  const place = (item.places || []).find((p) => s.places.some((f) => norm(p).includes(norm(f)) || norm(f).includes(norm(p))));
-  if (place) {
-    const f = s.places.find((x) => norm(place).includes(norm(x)) || norm(x).includes(norm(place)));
-    return `Lieu suivi : ${f}`;
+function placeMatch(item, s) {
+  for (const p of item.places || []) {
+    const f = (s.places || []).find((x) => norm(p).includes(norm(x)) || norm(x).includes(norm(p)));
+    if (f) return f;
   }
-  if (s.topics.includes(item.category)) return `Sujet suivi : ${CATEGORY_LABELS[item.category].toLowerCase()}`;
+  // Le lieu peut aussi n'apparaître que dans les mots-clés ou le titre.
+  return (s.places || []).find((x) => textOf(item).includes(words(x))) || null;
+}
+
+// Pourquoi une info grave passe le filtre : lieu suivi, sujet suivi, ou rien.
+export function followedReason(item, s) {
+  const place = placeMatch(item, s);
+  if (place) return `Lieu suivi : ${place}`;
+  const keep = matchGroups(item, s.keep_informed)[0];
+  if (keep) return `Tu suis : ${keep.label}`;
+  if ((s.topics || []).includes(item.category)) return `Sujet suivi : ${CATEGORY_LABELS[item.category].toLowerCase()}`;
   return null;
 }
 
 export function select(edition, s) {
-  const items = (edition.items || []).filter((i) => !i.fait_divers);
+  const avoided = (i) => i.importance < 9 && matchGroups(i, s.avoid).length > 0;
+  const items = (edition.items || []).filter((i) => !i.fait_divers && !avoided(i));
   const threshold = s.level === 'full' ? 6 : 8;
 
   // 1. L'essentiel : infos graves ou neutres, seulement si elles comptent vraiment.
@@ -77,19 +116,28 @@ export function select(edition, s) {
   if (topGood) essentiel.push(topGood);
   const used = new Set(essentiel.map((i) => i.id));
 
-  // 2. Le fil : bonnes nouvelles (et infos neutres utiles) dans tes thèmes.
-  const pool = items
-    .filter((i) => !used.has(i.id))
-    .filter((i) => s.themes.includes(themeOf(i.category)))
-    .filter((i) => i.tone === 'positive' || (i.tone === 'neutral' && NEUTRAL_OK.includes(i.category) && i.importance >= 4))
-    .sort((a, b) => b.importance - a.importance);
+  // 2. Le fil : bonnes nouvelles et infos neutres utiles, dans tes thèmes ou tes centres d'intérêt.
+  const pool = [];
+  for (const i of items) {
+    if (used.has(i.id) || i.tone === 'negative') continue;
+    const loves = matchGroups(i, s.interests);
+    const inTheme = s.themes.includes(themeOf(i.category));
+    const toneOk = i.tone === 'positive' || (i.tone === 'neutral' && (loves.length ? i.importance >= 3 : NEUTRAL_OK.includes(i.category) && i.importance >= 4));
+    if (!toneOk || (!inTheme && !loves.length)) continue;
+    pool.push({
+      ...i,
+      score: i.importance + 4 * Math.min(2, loves.length),
+      why: loves.length ? `Parce que tu aimes : ${loves[0].label}` : '',
+      group: loves.length ? `i:${loves[0].label}` : `t:${themeOf(i.category)}`,
+    });
+  }
+  pool.sort((a, b) => b.score - a.score);
 
-  // On alterne les thèmes pour éviter dix cartes d'affilée sur le même sujet.
+  // On alterne les sujets pour éviter dix cartes d'affilée sur le même thème.
   const groups = new Map();
   for (const i of pool) {
-    const k = themeOf(i.category);
-    if (!groups.has(k)) groups.set(k, []);
-    groups.get(k).push(i);
+    if (!groups.has(i.group)) groups.set(i.group, []);
+    groups.get(i.group).push(i);
   }
   const fil = [];
   while (fil.length < s.count && [...groups.values()].some((g) => g.length)) {

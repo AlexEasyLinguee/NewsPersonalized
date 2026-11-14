@@ -1,7 +1,11 @@
 import { THEMES, LEVELS, CATEGORY_LABELS, DEFAULT_SETTINGS, select, followedReason, themeOf } from './select.js';
+import { WORKER_URL } from './config.js';
 
 const TOPIC_CHOICES = [
+  { id: 'monde', label: 'Actu mondiale' },
   { id: 'aviation', label: 'Aviation' },
+  { id: 'economie', label: 'Économie' },
+  { id: 'tech', label: 'Tech' },
   { id: 'ecologie', label: 'Écologie' },
   { id: 'sante', label: 'Santé' },
   { id: 'espace', label: 'Espace' },
@@ -62,8 +66,10 @@ function show(tab) {
     if (b.dataset.tab === tab) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
   });
   document.body.classList.toggle('dark', tab === 'fil');
+  document.querySelector('nav.tabs').classList.toggle('hidden', tab === 'profil');
   document.querySelector('meta[name="theme-color"]').setAttribute('content', tab === 'fil' ? '#0F1D19' : '#F6F7F4');
   if (tab === 'reglages') renderSettings();
+  if (tab === 'profil') renderProfileForm();
   if (tab === 'favoris') renderFavs();
   if (tab === 'fil') updateProgress();
   window.scrollTo(0, 0);
@@ -78,7 +84,8 @@ function chipFor(item) {
   return `<span class="chip world">${esc(CATEGORY_LABELS[item.category] || 'Monde')}</span>`;
 }
 function essCard(item) {
-  const reason = followedReason(item, settings) || CATEGORY_LABELS[item.category] || '';
+  const f = followedReason(item, settings);
+  const reason = f && f !== 'Sujet suivi : monde' ? f : item.importance >= 8 && item.tone !== 'positive' ? 'Info majeure' : CATEGORY_LABELS[item.category] || '';
   return `<a class="card" href="${esc(safeUrl(item.url))}" target="_blank" rel="noopener">
     <div class="chips">${chipFor(item)}<span class="reason">${esc(reason)}</span></div>
     <h2>${esc(item.title)}</h2>
@@ -108,6 +115,7 @@ function slide(item, i) {
   return `<article class="slide" data-i="${i}" data-cat="${esc(CATEGORY_LABELS[item.category] || '')}">
     <div class="media">${img}</div>
     <div class="slide-body">
+      ${item.why ? `<span class="why">${esc(item.why)}</span>` : ''}
       <h2>${esc(item.title)}</h2>
       <p>${esc(item.summary)}</p>
       <p class="meta">${esc(item.source)} · ${esc(ago(item.published))} · <a href="${esc(safeUrl(item.url))}" target="_blank" rel="noopener">Lire l'article</a></p>
@@ -194,10 +202,24 @@ function renderFavs() {
 }
 
 /* ---------- Mon dosage ---------- */
+function groupTags(key, title) {
+  const groups = settings[key] || [];
+  if (!groups.length) return '';
+  return `<p class="small" style="margin:8px 0 6px;font-weight:700">${title}</p>
+    <div class="tags">${groups.map((g, k) => `<span class="tag">${esc(g.label)}<button type="button" data-rm-group="${key}:${k}" aria-label="Retirer ${esc(g.label)}">×</button></span>`).join('')}</div>`;
+}
 function renderSettings() {
   const lvl = LEVELS.find((l) => l.id === settings.level) || LEVELS[1];
   $('#settings').innerHTML = `
     <h1>Mon dosage</h1>
+    <section class="profile-box">
+      <h2>Mon profil</h2>
+      <p class="desc" style="margin:0 0 12px">${esc(settings.resume || 'Pas encore de profil : décris-toi en quelques phrases et l\u2019IA règle tout.')}</p>
+      ${groupTags('interests', 'Ce que tu aimes')}
+      ${groupTags('keep_informed', 'À savoir même si c\u2019est grave')}
+      ${groupTags('avoid', 'À ne plus voir')}
+      <button type="button" class="outline-btn" data-edit-profile style="width:100%;margin-top:6px">${settings.resume ? 'Réécrire mon profil' : 'Créer mon profil'}</button>
+    </section>
     <section>
       <h2>Mauvaises nouvelles</h2>
       <div class="seg" role="group" aria-label="Niveau de mauvaises nouvelles">
@@ -236,7 +258,11 @@ function renderSettings() {
 $('#settings').addEventListener('click', (e) => {
   const b = e.target.closest('button');
   if (!b) return;
-  if (b.dataset.level) settings.level = b.dataset.level;
+  if (b.hasAttribute('data-edit-profile')) return show('profil');
+  if (b.dataset.rmGroup) {
+    const [key, k] = b.dataset.rmGroup.split(':');
+    settings[key] = settings[key].filter((_, idx) => idx !== Number(k));
+  } else if (b.dataset.level) settings.level = b.dataset.level;
   else if (b.dataset.rmPlace) settings.places = settings.places.filter((_, k) => k !== Number(b.dataset.rmPlace));
   else if (b.dataset.topic) {
     const t = b.dataset.topic;
@@ -257,6 +283,93 @@ $('#settings').addEventListener('submit', (e) => {
   renderSettings();
 });
 
+/* ---------- Parle-moi de toi ---------- */
+let draft = null; // profil proposé par l'IA, en attente de validation
+
+function renderProfileForm(error = '') {
+  const first = !store.get('onboarded', false);
+  $('#profil-body').innerHTML = `
+    <h1>Parle-moi de toi</h1>
+    <p class="sub" style="margin-top:8px">Qu'est-ce qui te passionne ? Tes hobbies, ton métier, les lieux qui comptent pour toi, ce dont tu veux être tenu au courant, même quand c'est grave… et ce que tu ne veux plus voir.</p>
+    <label class="hidden" for="profile-text">Ton texte</label>
+    <textarea id="profile-text" maxlength="2000" placeholder="Ex. Je fais du surf et de la photo, je travaille dans la santé. Ma famille vit au Portugal, je veux savoir s'il s'y passe quelque chose de grave. J'adore les inventions écologiques et l'espace. La politique française m'épuise.">${esc(settings.profileText)}</textarea>
+    ${error ? `<p class="error" role="alert">${esc(error)}</p>` : ''}
+    <button type="button" class="cta" id="profile-go" style="margin:16px 0 0;width:100%">Créer mon profil</button>
+    <p class="small" style="margin-top:12px;line-height:1.5">Ton texte est envoyé à l'IA de Google (Gemini) pour créer ton profil, puis le profil est gardé uniquement sur ce téléphone. Évite d'y mettre des informations sensibles.</p>
+    <button type="button" class="link-btn" id="profile-skip">${first ? 'Continuer sans profil' : 'Annuler'}</button>`;
+  if (!WORKER_URL) {
+    $('#profile-go').disabled = true;
+    $('#profile-go').textContent = 'Bientôt disponible';
+  }
+}
+
+function renderDraft() {
+  const g = (key, title) => (draft[key] || []).length
+    ? `<p class="small" style="margin:14px 0 6px;font-weight:700">${title}</p><div class="tags">${draft[key].map((x, k) => `<span class="tag">${esc(x.label ?? x)}<button type="button" data-rm-draft="${key}:${k}" aria-label="Retirer">×</button></span>`).join('')}</div>`
+    : '';
+  const lvl = LEVELS.find((l) => l.id === draft.level) || LEVELS[1];
+  $('#profil-body').innerHTML = `
+    <h1>Voilà ton profil</h1>
+    <p class="sub" style="margin-top:8px">${esc(draft.resume)}</p>
+    ${g('interests', 'Ce que tu aimes')}
+    ${g('places', 'Lieux que tu suis')}
+    ${g('keep_informed', 'À savoir même si c\u2019est grave')}
+    ${g('avoid', 'À ne plus voir')}
+    <p class="small" style="margin:14px 0 0"><b>Mauvaises nouvelles :</b> ${esc(lvl.label)}. ${esc(lvl.desc)}</p>
+    <button type="button" class="cta" id="draft-ok" style="margin:20px 0 0;width:100%">C'est moi, on y va</button>
+    <button type="button" class="link-btn" id="draft-redo">Réécrire mon texte</button>`;
+}
+
+$('#profil-body').addEventListener('click', async (e) => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  if (b.id === 'profile-skip') {
+    store.set('onboarded', true);
+    return show('essentiel');
+  }
+  if (b.id === 'profile-go') {
+    const text = $('#profile-text').value.trim();
+    if (text.length < 10) return renderProfileForm('Écris au moins une phrase sur toi.');
+    settings.profileText = text;
+    b.disabled = true;
+    b.textContent = 'L\u2019IA lit ton texte…';
+    try {
+      const res = await fetch(WORKER_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.profile) throw new Error(data.error || `Erreur ${res.status}`);
+      draft = data.profile;
+      renderDraft();
+    } catch (err) {
+      renderProfileForm(err.message || 'Impossible de joindre l\u2019IA.');
+    }
+    return;
+  }
+  if (b.dataset.rmDraft) {
+    const [key, k] = b.dataset.rmDraft.split(':');
+    draft[key] = draft[key].filter((_, idx) => idx !== Number(k));
+    return renderDraft();
+  }
+  if (b.id === 'draft-redo') return renderProfileForm();
+  if (b.id === 'draft-ok') {
+    settings = {
+      ...settings,
+      interests: draft.interests,
+      places: draft.places,
+      keep_informed: draft.keep_informed,
+      avoid: draft.avoid,
+      themes: draft.themes && draft.themes.length ? [...new Set([...draft.themes, 'autre'])] : settings.themes,
+      topics: [...new Set(['monde', ...(draft.topics || [])])],
+      level: draft.level,
+      resume: draft.resume,
+    };
+    store.set('onboarded', true);
+    draft = null;
+    saveSettings();
+    show('essentiel');
+    toast('Profil enregistré');
+  }
+});
+
 /* ---------- Démarrage ---------- */
 async function load() {
   try {
@@ -273,3 +386,4 @@ async function load() {
   }
 }
 load();
+if (!store.get('onboarded', false)) show('profil');

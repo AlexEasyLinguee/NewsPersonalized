@@ -122,6 +122,17 @@
   body.dark nav.tabs button { color: var(--dark-muted); }
   body.dark nav.tabs button[aria-current="page"] { color: var(--mint); }
 
+  /* Profil */
+  .profile-form { padding: calc(28px + env(safe-area-inset-top)) 20px 40px; }
+  .profile-form h1 { font-size: 32px; }
+  .profile-form textarea { margin-top: 16px; width: 100%; min-height: 200px; border-radius: 16px; border: 1.5px solid #D7DDDA; padding: 14px; font: inherit; font-size: 16px; line-height: 1.45; background: #fff; color: var(--ink); resize: vertical; }
+  .profile-form textarea:focus, .add-row input:focus { outline: 2px solid var(--green); outline-offset: 1px; }
+  .profile-form .cta:disabled { background: #9AA6A1; cursor: default; }
+  .profile-box { background: #fff; border-radius: 16px; padding: 16px; }
+  .profile-box .tag { background: var(--ground); }
+  .link-btn { display: block; margin: 14px auto 0; min-height: 44px; padding: 0 12px; border: none; background: none; color: var(--green); font-size: 15px; font-weight: 700; cursor: pointer; }
+  .error { margin: 10px 0 0; padding: 10px 14px; border-radius: 12px; background: #FDE8E6; color: #A1261B; font-size: 14px; font-weight: 600; }
+  .why { font-size: 12px; font-weight: 700; color: var(--mint); }
   .toast { position: fixed; left: 50%; bottom: calc(var(--tabs-h) + 16px); transform: translateX(-50%); background: var(--ink); color: #fff; padding: 10px 16px; border-radius: 12px; font-size: 14px; font-weight: 600; z-index: 20; max-width: 90vw; text-align: center; }
 </style>
 </head>
@@ -154,6 +165,10 @@
 
   <section id="reglages" class="screen" aria-label="Mon dosage">
     <div class="wrap settings" id="settings"></div>
+  </section>
+
+  <section id="profil" class="screen" aria-label="Parle-moi de toi">
+    <div class="wrap profile-form" id="profil-body"></div>
   </section>
 
   <section id="favoris" class="screen" aria-label="Mes favoris">

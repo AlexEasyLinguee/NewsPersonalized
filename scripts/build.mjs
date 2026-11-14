@@ -10,7 +10,7 @@ const SOURCES = JSON.parse(await fs.readFile(new URL('sources.json', ROOT), 'utf
 
 const MAX_AGE_HOURS = 30;     // on ne garde que les articles récents
 const PER_SOURCE = 15;        // max d'articles lus par source
-const MAX_ITEMS = 240;        // plafond total envoyé à l'IA (limites de l'offre gratuite)
+const MAX_ITEMS = 300;        // plafond total envoyé à l'IA (limites de l'offre gratuite)
 const BATCH = 20;             // articles par requête IA
 const PAUSE_MS = 4500;        // pause entre deux requêtes IA
 // IA : Google Gemini, offre gratuite (clé dans le secret GEMINI_API_KEY du dépôt).
@@ -19,7 +19,7 @@ const ENDPOINT = `${GEMINI}/openai/chat/completions`;
 const TOKEN = process.env.GEMINI_API_KEY;
 let MODEL = process.env.MODEL || '';
 
-export const CATEGORIES = ['inventions', 'sante', 'ia', 'espace', 'ecologie', 'animaux', 'reportages', 'sourires', 'monde', 'aviation', 'autre'];
+export const CATEGORIES = ['inventions', 'sante', 'ia', 'espace', 'ecologie', 'animaux', 'reportages', 'sourires', 'sport', 'culture', 'tech', 'economie', 'monde', 'aviation', 'autre'];
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const arr = (v) => (v == null ? [] : Array.isArray(v) ? v : [v]);
@@ -129,9 +129,10 @@ Pour chaque article reçu, renvoie un objet avec :
 - "id" : l'id reçu
 - "importance" : entier 0-10. 10 = événement historique mondial. 8-9 = info mondiale majeure que tout le monde devrait connaître (catastrophe naturelle de grande ampleur, crash d'avion de ligne, escalade d'une guerre, élection majeure, découverte scientifique majeure). 5-7 = info significative à l'échelle d'un pays ou d'une région. 0-4 = info mineure, locale, anecdotique. 0 = publicité, bon plan, contenu promotionnel.
 - "tone" : "positive" (progrès, découverte, solution, invention utile, réussite écologique, histoire humaine qui fait du bien, belle nature), "neutral" (information factuelle sans charge négative, ex. un lancement de fusée, une annonce d'IA), ou "negative" (drame, conflit, crise, catastrophe, polémique).
-- "category" : un seul parmi ${CATEGORIES.join(', ')}. inventions = inventions et innovations qui améliorent le monde ; sante = santé et médecine ; ia = intelligence artificielle ; espace = spatial, astronomie, SpaceX/Starship ; ecologie = climat, énergie, environnement ; animaux = animaux et nature ; reportages = beaux reportages, culture, voyages ; sourires = histoires humaines touchantes ; monde = politique et géopolitique internationale ; aviation = aviation et transport aérien ; autre = le reste.
-- "fait_divers" : true pour les faits divers (crime local, petit accident, people, sport, faits isolés sans portée générale), sinon false.
+- "category" : un seul parmi ${CATEGORIES.join(', ')}. inventions = inventions et innovations qui améliorent le monde ; sante = santé et médecine ; ia = intelligence artificielle ; espace = spatial, astronomie, SpaceX/Starship ; ecologie = climat, énergie, environnement ; animaux = animaux et nature ; reportages = beaux reportages, culture, voyages ; sourires = histoires humaines touchantes ; sport = sport ; culture = cinéma, musique, arts, livres, gastronomie ; tech = technologie hors IA ; economie = économie, entreprises, finance ; monde = politique et géopolitique internationale ; aviation = aviation et transport aérien ; autre = le reste.
+- "fait_divers" : true pour les faits divers (crime local, petit accident, people et ragots, faits isolés sans portée générale), sinon false. Le sport n'est pas un fait divers.
 - "places" : liste des pays, régions ou villes principalement concernés, en français (ex. ["Bali", "Indonésie"]). Liste vide si aucun.
+- "tags" : 4 à 8 mots-clés en minuscules qui décrivent précisément le sujet (personnes, entreprises, activités, objets, lieux), en français et, pour les termes courants, aussi en anglais (ex. ["surf", "océan", "portugal", "nazaré", "big wave"]).
 - "title_fr" : titre clair et factuel en français, sans sensationnalisme, 90 caractères max.
 - "summary_fr" : résumé en français en une ou deux phrases (220 caractères max), qui dit pourquoi c'est intéressant ou important. N'invente aucun fait absent de l'article.
 Réponds uniquement en JSON : {"items": [ ... ]}.`;
@@ -196,6 +197,7 @@ function mockScore(batch) {
     category: CATEGORIES[b.id % CATEGORIES.length],
     fait_divers: b.id % 9 === 0,
     places: b.id % 5 === 0 ? ['Bali', 'Indonésie'] : [],
+    tags: b.id % 3 === 0 ? ['surf', 'océan'] : ['guitare', 'musique'],
     title_fr: b.title,
     summary_fr: b.desc.slice(0, 200),
   }));
@@ -218,6 +220,7 @@ function clean(r, src) {
     category,
     fait_divers: Boolean(r.fait_divers),
     places: arr(r.places).map(String).slice(0, 6),
+    tags: arr(r.tags).map((t) => String(t).toLowerCase()).slice(0, 10),
   };
 }
 
