@@ -2,43 +2,46 @@
 // Fichier sans dépendance, utilisé par l'app (et testable avec Node).
 
 export const THEMES = [
-  { id: 'inventions', label: 'Inventions qui changent le monde' },
-  { id: 'sante', label: 'Santé et médecine' },
-  { id: 'ia', label: 'Intelligence artificielle' },
-  { id: 'espace', label: 'Espace et Starship' },
-  { id: 'ecologie', label: 'Écologie et climat' },
-  { id: 'animaux', label: 'Animaux et nature' },
-  { id: 'reportages', label: 'Beaux reportages' },
-  { id: 'sourires', label: 'Histoires qui font sourire' },
-  { id: 'sport', label: 'Sport' },
-  { id: 'culture', label: 'Culture, arts et gastronomie' },
-  { id: 'tech', label: 'Technologie' },
-  { id: 'economie', label: 'Économie et entreprises' },
-  { id: 'autre', label: 'Autres bonnes nouvelles' },
+  { id: 'inventions', fr: 'Inventions qui changent le monde', en: 'World-changing inventions' },
+  { id: 'sante', fr: 'Santé et médecine', en: 'Health and medicine' },
+  { id: 'ia', fr: 'Intelligence artificielle', en: 'Artificial intelligence' },
+  { id: 'espace', fr: 'Espace et Starship', en: 'Space and Starship' },
+  { id: 'ecologie', fr: 'Écologie et climat', en: 'Ecology and climate' },
+  { id: 'animaux', fr: 'Animaux et nature', en: 'Animals and nature' },
+  { id: 'reportages', fr: 'Beaux reportages', en: 'Beautiful stories' },
+  { id: 'sourires', fr: 'Histoires qui font sourire', en: 'Feel-good stories' },
+  { id: 'sport', fr: 'Sport', en: 'Sport' },
+  { id: 'culture', fr: 'Culture, arts et gastronomie', en: 'Culture, arts and food' },
+  { id: 'tech', fr: 'Technologie', en: 'Technology' },
+  { id: 'economie', fr: 'Économie et entreprises', en: 'Business and economy' },
+  { id: 'autre', fr: 'Autres bonnes nouvelles', en: 'Other good news' },
 ];
 
 export const CATEGORY_LABELS = {
-  inventions: 'Inventions qui changent le monde',
-  sante: 'Santé',
-  ia: 'Intelligence artificielle',
-  espace: 'Espace',
-  ecologie: 'Écologie',
-  animaux: 'Animaux et nature',
-  reportages: 'Reportage',
-  sourires: 'Histoire qui fait sourire',
-  sport: 'Sport',
-  culture: 'Culture',
-  tech: 'Technologie',
-  economie: 'Économie',
-  monde: 'Monde',
-  aviation: 'Aviation',
-  autre: 'Actualité',
+  inventions: { fr: 'Inventions qui changent le monde', en: 'World-changing inventions' },
+  sante: { fr: 'Santé', en: 'Health' },
+  ia: { fr: 'Intelligence artificielle', en: 'Artificial intelligence' },
+  espace: { fr: 'Espace', en: 'Space' },
+  ecologie: { fr: 'Écologie', en: 'Ecology' },
+  animaux: { fr: 'Animaux et nature', en: 'Animals and nature' },
+  reportages: { fr: 'Reportage', en: 'Story' },
+  sourires: { fr: 'Histoire qui fait sourire', en: 'Feel-good story' },
+  sport: { fr: 'Sport', en: 'Sport' },
+  culture: { fr: 'Culture', en: 'Culture' },
+  tech: { fr: 'Technologie', en: 'Technology' },
+  economie: { fr: 'Économie', en: 'Business' },
+  monde: { fr: 'Monde', en: 'World' },
+  aviation: { fr: 'Aviation', en: 'Aviation' },
+  autre: { fr: 'Actualité', en: 'News' },
 };
 
 export const LEVELS = [
-  { id: 'min', label: 'Minimum', desc: 'Uniquement les événements mondiaux majeurs, ceux que tout le monde doit connaître.' },
-  { id: 'eq', label: 'Équilibré', desc: 'Les événements majeurs, plus ce qui touche tes lieux et sujets suivis. Le reste est filtré.' },
-  { id: 'full', label: 'Complet', desc: 'Toute l’actualité importante, bonne ou mauvaise, toujours sans faits divers.' },
+  { id: 'min', fr: { label: 'Minimum', desc: 'Uniquement les événements mondiaux majeurs, ceux que tout le monde doit connaître.' },
+    en: { label: 'Minimum', desc: 'Only major world events, the ones everyone should know about.' } },
+  { id: 'eq', fr: { label: 'Équilibré', desc: 'Les événements majeurs, plus ce qui touche tes lieux et sujets suivis. Le reste est filtré.' },
+    en: { label: 'Balanced', desc: 'Major events, plus anything touching the places and topics you follow. The rest is filtered out.' } },
+  { id: 'full', fr: { label: 'Complet', desc: 'Toute l\u2019actualité importante, bonne ou mauvaise, toujours sans faits divers.' },
+    en: { label: 'Full', desc: 'All the important news, good or bad, still without minor incidents and gossip.' } },
 ];
 
 // Réglages neutres d'un nouveau profil (le texte « Parle-moi de toi » les remplit).
@@ -53,6 +56,9 @@ export const DEFAULT_SETTINGS = {
   avoid: [],          // [{label, keywords[]}] : à ne plus voir
   resume: '',
   profileText: '',
+  lang: 'fr',
+  sound: true,
+  haptics: true,
 };
 
 // Catégories qui méritent leur place dans le fil même quand le ton est neutre
@@ -116,13 +122,13 @@ function placeMatch(item, s) {
   return (s.places || []).find((x) => textOf(item).includes(words(x))) || null;
 }
 
-// Pourquoi une info grave passe le filtre : lieu suivi, sujet suivi, ou rien.
+// Pourquoi une info grave passe le filtre : {kind: 'place'|'keep'|'topic', name}, ou null.
 export function followedReason(item, s) {
   const place = placeMatch(item, s);
-  if (place) return `Lieu suivi : ${place}`;
+  if (place) return { kind: 'place', name: place };
   const keep = matchGroups(item, s.keep_informed)[0];
-  if (keep) return `Tu suis : ${keep.label}`;
-  if ((s.topics || []).includes(item.category)) return `Sujet suivi : ${CATEGORY_LABELS[item.category].toLowerCase()}`;
+  if (keep) return { kind: 'keep', name: keep.label };
+  if ((s.topics || []).includes(item.category)) return { kind: 'topic', name: item.category };
   return null;
 }
 
@@ -153,7 +159,7 @@ export function select(edition, s) {
     pool.push({
       ...i,
       score: i.importance + 4 * Math.min(2, loves.length),
-      why: loves.length ? `Parce que tu aimes : ${loves[0].label}` : '',
+      why: loves.length ? loves[0].label : '',
       group: loves.length ? `i:${loves[0].label}` : `t:${themeOf(i.category)}`,
     });
   }

@@ -135,6 +135,7 @@ Pour chaque article reçu, renvoie un objet avec :
 - "tags" : 4 à 8 mots-clés en minuscules qui décrivent précisément le sujet (personnes, entreprises, activités, objets, lieux), en français et, pour les termes courants, aussi en anglais (ex. ["surf", "océan", "portugal", "nazaré", "big wave"]).
 - "title_fr" : titre clair et factuel en français, sans sensationnalisme, 90 caractères max.
 - "summary_fr" : résumé en français en une ou deux phrases (220 caractères max), qui dit pourquoi c'est intéressant ou important. N'invente aucun fait absent de l'article.
+- "title_en" et "summary_en" : les mêmes titre et résumé, en anglais naturel.
 Réponds uniquement en JSON : {"items": [ ... ]}.`;
 
 // Choisit automatiquement le meilleur modèle gratuit disponible (Flash-Lite, sinon Flash).
@@ -200,6 +201,8 @@ function mockScore(batch) {
     tags: b.id % 3 === 0 ? ['surf', 'océan'] : ['guitare', 'musique'],
     title_fr: b.title,
     summary_fr: b.desc.slice(0, 200),
+    title_en: `EN ${b.title}`,
+    summary_en: `EN ${b.desc.slice(0, 180)}`,
   }));
 }
 
@@ -211,6 +214,8 @@ function clean(r, src) {
     id: src.id,
     title: String(r.title_fr || src.title).slice(0, 140),
     summary: String(r.summary_fr || src.desc).slice(0, 300),
+    title_en: r.title_en ? String(r.title_en).slice(0, 140) : undefined,
+    summary_en: r.summary_en ? String(r.summary_en).slice(0, 300) : undefined,
     url: src.url,
     image: src.image,
     source: src.source,

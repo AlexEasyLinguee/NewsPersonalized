@@ -94,7 +94,12 @@ export default {
     if (request.method !== 'POST') return json({ error: 'Méthode non autorisée' }, 405, origin);
 
     let text = '';
-    try { text = String((await request.json()).text || '').trim(); } catch { /* corps invalide */ }
+    let lang = 'fr';
+    try {
+      const body = await request.json();
+      text = String(body.text || '').trim();
+      if (body.lang === 'en') lang = 'en';
+    } catch { /* corps invalide */ }
     if (text.length < 10) return json({ error: 'Écris au moins une phrase sur toi.' }, 400, origin);
     if (text.length > MAX_CHARS) return json({ error: `Texte trop long (${MAX_CHARS} caractères max).` }, 400, origin);
 
@@ -107,7 +112,12 @@ export default {
           model,
           temperature: 0.3,
           response_format: { type: 'json_object' },
-          messages: [{ role: 'system', content: SYSTEM }, { role: 'user', content: text }],
+          messages: [
+            { role: 'system', content: SYSTEM + (lang === 'en'
+              ? '\nLa personne utilise l\'app en anglais : écris "resume" (en tutoyant → en anglais naturel, ex. « You love surfing… ») et tous les "label" en anglais. Les mots-clés restent en français ET en anglais.'
+              : '\nÉcris "resume" et les "label" en français.') },
+            { role: 'user', content: text },
+          ],
         }),
         signal: AbortSignal.timeout(25000),
       });
