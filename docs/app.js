@@ -296,7 +296,8 @@ function renderEssentiel() {
   $('#ess-date').textContent = date.charAt(0).toUpperCase() + date.slice(1);
   $('#ess-sub').textContent = t('ess_sub', sel.essentiel.length);
   const ageH = (Date.now() - d.getTime()) / 3600e3;
-  $('#ess-stale').innerHTML = ageH > 30 ? `<div class="stale">${esc(t('stale'))}</div>` : '';
+  $('#ess-stale').innerHTML = !navigator.onLine ? `<div class="stale offline">${esc(t('offline_banner', date.toLowerCase()))}</div>`
+    : ageH > 30 ? `<div class="stale">${esc(t('stale'))}</div>` : '';
   $('#ess-list').innerHTML = sel.essentiel.map(essCard).join('') || `<div class="empty">${esc(t('ess_empty'))}</div>`;
   $('#go-fil').innerHTML = `${esc(t('go_fil', sel.fil.length))} ${ICONS.arrow}`;
 }
@@ -498,6 +499,7 @@ function renderSettings() {
       </div>
     </section>
     ${pushSection()}
+    ${offlineSection()}
     <section>
       <h2>${esc(t('fx_title'))}</h2>
       <p class="hint">${esc(t('fx_hint'))}</p>
@@ -519,6 +521,7 @@ $('#settings').addEventListener('click', (e) => {
   if (!b) return;
   if (b.hasAttribute('data-edit-profile')) return show('profil');
   if (b.hasAttribute('data-push')) return togglePush(b, renderSettings);
+  if (b.hasAttribute('data-offline')) { b.disabled = true; b.textContent = t('offline_working'); return precacheEdition(true); }
   if (b.dataset.lang) setLanguage(b.dataset.lang);
   else if (b.dataset.artlang) settings.articleLang = b.dataset.artlang;
   else if (b.dataset.fx) {
@@ -838,6 +841,44 @@ function handleHash() {
 window.addEventListener('hashchange', handleHash);
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') refreshInbox(); });
 
+/* ---------- Hors ligne ---------- */
+let offlineInfo = store.get('offline', null); // { edition: generated_at, ok, total }
+function precacheEdition(manual = false) {
+  if (!('serviceWorker' in navigator) || !edition) return;
+  const urls = [...sel.essentiel, ...sel.fil, ...favs].map((i) => i.image).filter(Boolean).map(safeUrl).filter((u) => u !== '#');
+  navigator.serviceWorker.ready.then((reg) => {
+    if (!reg.active) return;
+    precacheManual = manual;
+    reg.active.postMessage({ type: 'precache', urls });
+  }).catch(() => {});
+}
+let precacheManual = false;
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.addEventListener('message', (e) => {
+    if (e.data?.type !== 'precached' || !edition) return;
+    offlineInfo = { edition: edition.generated_at, ok: e.data.ok, total: e.data.total };
+    store.set('offline', offlineInfo);
+    if (precacheManual) { toast(t('offline_ready_toast', sel.essentiel.length + sel.fil.length)); precacheManual = false; }
+    if ($('#reglages').classList.contains('active')) renderSettings();
+  });
+}
+function offlineSection() {
+  const ready = offlineInfo && edition && offlineInfo.edition === edition.generated_at;
+  return `<section>
+      <h2>${esc(t('offline_title'))}</h2>
+      <p class="hint">${esc(ready ? t('offline_ready', sel.essentiel.length + sel.fil.length) : t('offline_hint'))}</p>
+      <p class="hint">${esc(t('offline_tip'))}</p>
+      <button type="button" class="outline-btn" data-offline style="width:100%">${esc(t('offline_btn'))}</button>
+    </section>`;
+}
+// Hors ligne, les liens vers les articles complets ne peuvent pas s'ouvrir : on prévient.
+document.addEventListener('click', (e) => {
+  const a = e.target.closest('a[target="_blank"]');
+  if (a && !navigator.onLine) { e.preventDefault(); toast(t('offline_link')); }
+}, true);
+window.addEventListener('online', () => { renderEssentiel(); refreshInbox(); });
+window.addEventListener('offline', renderEssentiel);
+
 /* ---------- Démarrage ---------- */
 async function load() {
   try {
@@ -847,6 +888,7 @@ async function load() {
     computeSel();
     renderEssentiel();
     renderFeed();
+    setTimeout(() => precacheEdition(false), 1500); // garde les photos du jour pour le hors-ligne
   } catch {
     $('#ess-sub').textContent = t('no_edition');
     $('#ess-list').innerHTML = `<div class="empty">${esc(t('no_edition_p'))}</div>`;
@@ -854,7 +896,7 @@ async function load() {
   }
 }
 applyLanguage();
-if (pushState() === 'on') navigator.serviceWorker.register('sw.js').catch(() => {});
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 $('#ess-sub').textContent = t('loading');
 load().then(refreshInbox);
 updateBadge();
