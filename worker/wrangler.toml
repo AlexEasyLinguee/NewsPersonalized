@@ -1,0 +1,14 @@
+# Configuration du relais Cloudflare (déployé par .github/workflows/worker.yml)
+name = "clair-profil"
+main = "worker.js"
+compatibility_date = "2026-11-01"
+keep_vars = true   # garde les variables réglées dans le tableau de bord (la clé Gemini est un secret, toujours conservée)
+workers_dev = true
+
+[triggers]
+# Notification du matin : 5 h 35 et 6 h 35 UTC (l'édition sort vers 5 h 05 ; un seul envoi par édition)
+crons = ["35 5 * * *", "35 6 * * *"]
+
+[[kv_namespaces]]
+binding = "CLAIR"
+id = "__KV_ID__"   # remplacé automatiquement au déploiement

@@ -1,10 +1,18 @@
-// Relais Cloudflare pour Clair : transforme le texte « Parle-moi de toi » en profil structuré.
-// La clé Gemini reste ici (secret GEMINI_API_KEY du Worker), jamais dans l'app.
-// Rien n'est stocké : le texte est envoyé à Gemini, le profil renvoyé à l'app, point.
+// Relais Cloudflare pour Clair.
+// 1. POST /profile : transforme le texte « Parle-moi de toi » en profil structuré (via Gemini).
+//    La clé Gemini reste ici (secret GEMINI_API_KEY), jamais dans l'app. Le texte n'est pas stocké.
+// 2. /push/* : abonnements aux notifications, gardés dans le stockage KV « CLAIR ».
+// 3. Tâche planifiée : chaque matin, une notification « Ton édition est prête » à tous les abonnés.
+// Déployé automatiquement par GitHub Actions (.github/workflows/worker.yml).
+
+import { generateVapid, sendPush } from './webpush.js';
 
 const ALLOWED_ORIGINS = ['https://alexeasylinguee.github.io'];
 const GEMINI = 'https://generativelanguage.googleapis.com/v1beta';
 const MAX_CHARS = 2000;
+const EDITION_URL = 'https://alexeasylinguee.github.io/NewsPersonalized/edition.json';
+const APP_URL = 'https://alexeasylinguee.github.io/NewsPersonalized/';
+const PUSH_SUBJECT = 'mailto:noreply@alexeasylinguee.github.io';
 
 const THEMES = ['inventions', 'sante', 'ia', 'espace', 'ecologie', 'animaux', 'reportages', 'sourires', 'sport', 'culture', 'tech', 'economie', 'autre'];
 const TOPICS = ['monde', 'aviation', 'sante', 'ecologie', 'espace', 'ia', 'tech', 'economie', 'sport', 'culture'];
@@ -34,7 +42,7 @@ Règles :
 function cors(origin) {
   return {
     'Access-Control-Allow-Origin': origin,
-    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type',
     'Access-Control-Max-Age': '86400',
     Vary: 'Origin',
@@ -86,13 +94,82 @@ function cleanProfile(p) {
   };
 }
 
-export default {
-  async fetch(request, env) {
-    const origin = request.headers.get('Origin') || '';
-    if (!ALLOWED_ORIGINS.includes(origin)) return new Response('Forbidden', { status: 403 });
-    if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors(origin) });
-    if (request.method !== 'POST') return json({ error: 'Méthode non autorisée' }, 405, origin);
+/* ---------- Notifications ---------- */
+async function getVapid(env) {
+  let vapid = await env.CLAIR.get('vapid', 'json');
+  if (!vapid) {
+    vapid = await generateVapid();
+    await env.CLAIR.put('vapid', JSON.stringify(vapid));
+  }
+  return vapid;
+}
+async function subKey(endpoint) {
+  const h = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(endpoint)));
+  return `sub:${[...h.slice(0, 16)].map((b) => b.toString(16).padStart(2, '0')).join('')}`;
+}
+const PUSH_TEXT = {
+  fr: { title: 'Ton édition est prête', lead: 'À la une des bonnes nouvelles : ', fallback: 'L\u2019essentiel du jour et de belles histoires t\u2019attendent.', test: 'Notifications activées : à demain matin !' },
+  en: { title: 'Your edition is ready', lead: 'Top good news: ', fallback: 'Today\u2019s essentials and some good stories are waiting for you.', test: 'Notifications are on: see you tomorrow morning!' },
+};
+function morningMessage(edition, lang) {
+  const tx = PUSH_TEXT[lang] || PUSH_TEXT.fr;
+  const top = (edition.items || []).filter((i) => i.tone === 'positive' && !i.fait_divers).sort((a, b) => b.importance - a.importance)[0];
+  const headline = top ? (lang === 'en' && top.title_en) || top.title : '';
+  return { title: tx.title, body: headline ? tx.lead + headline : tx.fallback, url: APP_URL };
+}
 
+// Envoie la notification du matin si une nouvelle édition est sortie depuis le dernier envoi.
+async function notifyMorning(env) {
+  const res = await fetch(`${EDITION_URL}?t=${Date.now()}`, { cf: { cacheTtl: 0 } });
+  if (!res.ok) return;
+  const edition = await res.json();
+  const generated = Date.parse(edition.generated_at);
+  if (!generated || Date.now() - generated > 8 * 3600e3) return; // édition trop ancienne
+  if (Number(await env.CLAIR.get('last_notified')) >= generated) return; // déjà envoyée
+  await env.CLAIR.put('last_notified', String(generated));
+  const vapid = await getVapid(env);
+  const messages = { fr: morningMessage(edition, 'fr'), en: morningMessage(edition, 'en') };
+  let cursor;
+  do {
+    const page = await env.CLAIR.list({ prefix: 'sub:', cursor });
+    for (const k of page.keys) {
+      const rec = await env.CLAIR.get(k.name, 'json');
+      if (!rec) continue;
+      try {
+        const status = await sendPush(rec.sub, messages[rec.lang] || messages.fr, vapid, PUSH_SUBJECT);
+        if (status === 404 || status === 410) await env.CLAIR.delete(k.name); // abonnement expiré
+      } catch { /* on passe au suivant */ }
+    }
+    cursor = page.list_complete ? undefined : page.cursor;
+  } while (cursor);
+}
+
+async function handlePush(path, request, env, origin) {
+  if (!env.CLAIR) return json({ error: 'Stockage des notifications non configuré.' }, 503, origin);
+  if (path === '/push/key') return json({ key: (await getVapid(env)).publicKey }, 200, origin);
+  let body = {};
+  try { body = await request.json(); } catch { /* corps invalide */ }
+  if (path === '/push/subscribe') {
+    const sub = body.subscription;
+    if (!sub || !/^https:\/\//.test(sub.endpoint || '') || !sub.keys?.p256dh || !sub.keys?.auth) return json({ error: 'Abonnement invalide' }, 400, origin);
+    const lang = body.lang === 'en' ? 'en' : 'fr';
+    await env.CLAIR.put(await subKey(sub.endpoint), JSON.stringify({ sub: { endpoint: sub.endpoint, keys: { p256dh: sub.keys.p256dh, auth: sub.keys.auth } }, lang, at: new Date().toISOString() }));
+    if (body.test) {
+      const tx = PUSH_TEXT[lang];
+      const status = await sendPush(sub, { title: 'Clair', body: tx.test, url: APP_URL }, await getVapid(env), PUSH_SUBJECT).catch(() => 0);
+      return json({ ok: true, test: status }, 200, origin);
+    }
+    return json({ ok: true }, 200, origin);
+  }
+  if (path === '/push/unsubscribe') {
+    if (body.endpoint) await env.CLAIR.delete(await subKey(String(body.endpoint)));
+    return json({ ok: true }, 200, origin);
+  }
+  return json({ error: 'Introuvable' }, 404, origin);
+}
+
+/* ---------- Profil ---------- */
+async function handleProfile(request, env, origin) {
     let text = '';
     let lang = 'fr';
     try {
@@ -131,5 +208,19 @@ export default {
       const msg = e.name === 'TimeoutError' ? 'l\u2019IA met trop de temps à répondre, réessaie.' : e.message;
       return json({ error: `Impossible de créer le profil : ${msg}` }, 502, origin);
     }
+}
+
+export default {
+  async fetch(request, env) {
+    const origin = request.headers.get('Origin') || '';
+    if (!ALLOWED_ORIGINS.includes(origin)) return new Response('Forbidden', { status: 403 });
+    if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors(origin) });
+    const path = new URL(request.url).pathname.replace(/\/+$/, '') || '/';
+    if (path.startsWith('/push/')) return handlePush(path, request, env, origin);
+    if (request.method !== 'POST') return json({ error: 'Méthode non autorisée' }, 405, origin);
+    return handleProfile(request, env, origin);
+  },
+  async scheduled(event, env, ctx) {
+    if (env.CLAIR) ctx.waitUntil(notifyMorning(env));
   },
 };

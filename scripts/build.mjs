@@ -215,6 +215,8 @@ function clean(r, src) {
     title: String(r.title_fr || src.title).slice(0, 140),
     summary: String(r.summary_fr || src.desc).slice(0, 300),
     title_en: r.title_en ? String(r.title_en).slice(0, 140) : undefined,
+    orig_title: src.title.slice(0, 160),
+    orig_summary: src.desc.slice(0, 300),
     summary_en: r.summary_en ? String(r.summary_en).slice(0, 300) : undefined,
     url: src.url,
     image: src.image,

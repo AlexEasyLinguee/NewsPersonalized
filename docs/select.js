@@ -57,6 +57,7 @@ export const DEFAULT_SETTINGS = {
   resume: '',
   profileText: '',
   lang: 'fr',
+  articleLang: 'translated', // 'translated' = dans la langue de l'app, 'original' = version d'origine
   sound: true,
   haptics: true,
 };

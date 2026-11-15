@@ -36,8 +36,10 @@ const catLabel = (c) => L(CATEGORY_LABELS[c] || CATEGORY_LABELS.autre);
 const themeLabel = (id) => L(THEMES.find((x) => x.id === id));
 const levelOf = (id) => L(LEVELS.find((l) => l.id === id) || LEVELS[1]);
 const topicLabel = (id) => (id === 'monde' ? t('topic_world') : catLabel(id));
-// Titre et résumé dans la langue choisie (repli sur le français pour les anciennes éditions).
-const tx = (item, f) => (settings.lang === 'en' && item[`${f}_en`]) || item[f];
+// Titre et résumé : version d'origine si demandé, sinon dans la langue de l'app
+// (repli sur le français pour les anciennes éditions).
+const tx = (item, f) => (settings.articleLang === 'original' && item[`orig_${f}`])
+  || (settings.lang === 'en' && item[`${f}_en`]) || item[f];
 
 function safeUrl(u) {
   try { const x = new URL(u); return /^https?:$/.test(x.protocol) ? x.href : '#'; } catch { return '#'; }
@@ -158,6 +160,70 @@ function reward(idx, withFeedback) {
   if (curIdx >= sel.fil.length) refreshEndStats();
 }
 
+/* ---------- Notifications du matin ---------- */
+const PUSH_BASE = WORKER_URL.replace(/\/+$/, '');
+const isStandalone = () => window.navigator.standalone === true || window.matchMedia('(display-mode: standalone)').matches;
+const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+function pushState() {
+  if (!WORKER_URL) return 'unsupported';
+  if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) {
+    return isIOS && !isStandalone() ? 'install' : 'unsupported';
+  }
+  if (Notification.permission === 'denied') return 'denied';
+  return store.get('push', false) && Notification.permission === 'granted' ? 'on' : 'available';
+}
+const keyBytes = (k) => Uint8Array.from(atob(k.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((k.length + 3) % 4)), (c) => c.charCodeAt(0));
+async function enablePush() {
+  const permission = Notification.requestPermission(); // appelé tout de suite : doit suivre le toucher
+  const reg = await navigator.serviceWorker.register('sw.js');
+  if ((await permission) !== 'granted') throw new Error(t('push_denied'));
+  await navigator.serviceWorker.ready;
+  const { key } = await (await fetch(`${PUSH_BASE}/push/key`)).json();
+  let sub = await reg.pushManager.getSubscription();
+  if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(key) });
+  const res = await fetch(`${PUSH_BASE}/push/subscribe`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ subscription: sub.toJSON(), lang: settings.lang, test: true }),
+  });
+  if (!res.ok) throw new Error(t('push_error'));
+  store.set('push', true);
+}
+async function disablePush() {
+  const reg = await navigator.serviceWorker.getRegistration();
+  const sub = reg && (await reg.pushManager.getSubscription());
+  if (sub) {
+    await fetch(`${PUSH_BASE}/push/unsubscribe`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ endpoint: sub.endpoint }) }).catch(() => {});
+    await sub.unsubscribe().catch(() => {});
+  }
+  store.set('push', false);
+}
+async function syncPushLang() {
+  if (pushState() !== 'on') return;
+  const reg = await navigator.serviceWorker.getRegistration();
+  const sub = reg && (await reg.pushManager.getSubscription());
+  if (sub) fetch(`${PUSH_BASE}/push/subscribe`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ subscription: sub.toJSON(), lang: settings.lang }) }).catch(() => {});
+}
+async function togglePush(btn, after) {
+  btn.disabled = true;
+  try {
+    if (pushState() === 'on') { await disablePush(); toast(t('push_off_toast')); }
+    else { await enablePush(); toast(t('push_on_toast')); }
+  } catch (err) {
+    toast(err.message || t('push_error'));
+  }
+  after();
+}
+function pushSection() {
+  const st = pushState();
+  const btn = st === 'on' ? t('push_disable') : st === 'available' ? t('push_enable') : '';
+  return `<section>
+      <h2>${esc(t('push_title'))}</h2>
+      <p class="hint">${esc(t(`push_${st}`))}</p>
+      ${btn ? `<button type="button" class="${st === 'on' ? 'outline-btn' : 'cta'}" data-push style="width:100%;margin:0">${esc(btn)}</button>` : ''}
+    </section>`;
+}
+
 /* ---------- Navigation ---------- */
 function show(tab) {
   document.querySelectorAll('.screen').forEach((el) => el.classList.toggle('active', el.id === tab));
@@ -245,6 +311,7 @@ function endSlide() {
     </div>
     ${n ? `<div class="note streak">${ICONS.flame}<span id="streak-text">${esc(t('streak', n))}</span></div>` : ''}
     <div class="note">${ICONS.bell}<span>${t('next_ed')}</span></div>
+    ${pushState() === 'available' ? `<button type="button" class="cta" data-act="push" style="margin:0;width:100%">${esc(t('push_cta'))}</button>` : ''}
     <button type="button" class="outline-btn" data-act="favs">${esc(t('see_favs', favs.length))}</button>
   </article>`;
 }
@@ -303,6 +370,7 @@ feedEl.addEventListener('click', async (e) => {
   const item = sel.fil[Number(btn.dataset.i)];
   const act = btn.dataset.act;
   if (act === 'favs') return show('favoris');
+  if (act === 'push') return togglePush(btn, refreshEndStats);
   if (!item) return;
   if (act === 'fav') {
     if (isFav(item.url)) favs = favs.filter((f) => f.url !== item.url);
@@ -353,6 +421,12 @@ function renderSettings() {
     <section>
       <h2>${esc(t('lang_title'))}</h2>
       ${langSwitch()}
+      <p class="hint" style="margin:14px 0 8px">${esc(t('art_lang_title'))}</p>
+      <div class="seg two" role="group" aria-label="${esc(t('art_lang_title'))}">
+        <button type="button" data-artlang="translated" aria-pressed="${settings.articleLang !== 'original'}">${esc(t('art_translated'))}</button>
+        <button type="button" data-artlang="original" aria-pressed="${settings.articleLang === 'original'}">${esc(t('art_original'))}</button>
+      </div>
+      <p class="desc">${esc(settings.articleLang === 'original' ? t('art_original_desc') : t('art_translated_desc'))}</p>
     </section>
     <section class="profile-box">
       <h2>${esc(t('profile'))}</h2>
@@ -395,6 +469,7 @@ function renderSettings() {
         <button type="button" class="round" data-count="5" aria-label="${esc(t('more_cards'))}">+</button>
       </div>
     </section>
+    ${pushSection()}
     <section>
       <h2>${esc(t('fx_title'))}</h2>
       <p class="hint">${esc(t('fx_hint'))}</p>
@@ -409,12 +484,15 @@ function setLanguage(lang) {
   settings.lang = lang;
   applyLanguage();
   saveSettings();
+  syncPushLang();
 }
 $('#settings').addEventListener('click', (e) => {
   const b = e.target.closest('button');
   if (!b) return;
   if (b.hasAttribute('data-edit-profile')) return show('profil');
+  if (b.hasAttribute('data-push')) return togglePush(b, renderSettings);
   if (b.dataset.lang) setLanguage(b.dataset.lang);
+  else if (b.dataset.artlang) settings.articleLang = b.dataset.artlang;
   else if (b.dataset.fx) {
     settings[b.dataset.fx] = !settings[b.dataset.fx];
     store.set('settings', settings);
@@ -562,6 +640,7 @@ async function load() {
   }
 }
 applyLanguage();
+if (pushState() === 'on') navigator.serviceWorker.register('sw.js').catch(() => {});
 $('#ess-sub').textContent = t('loading');
 load();
 if (!store.get('onboarded', false)) show('profil');

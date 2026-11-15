@@ -38,8 +38,20 @@ MOCK_AI=1 node scripts/build.mjs   # notes factices, pour vérifier l'affichage
 
 Au premier lancement, chaque personne décrit ce qu'elle aime ; l'IA en fait un profil (intérêts, lieux, sujets à suivre même s'ils sont graves, sujets à éviter, dosage), gardé uniquement sur son téléphone.
 
-L'IA est appelée via un petit relais Cloudflare (`worker/worker.js`) pour que la clé Gemini ne soit jamais dans l'app :
+L'IA est appelée via un petit relais Cloudflare (`worker/`) pour que la clé Gemini ne soit jamais dans l'app. Le même relais gère les notifications du matin.
 
-1. Cloudflare › Workers & Pages › Create › Hello World › Deploy, puis **Edit code** : coller `worker/worker.js` et **Deploy**.
-2. Settings du Worker › Variables and Secrets › Add › type **Secret**, nom `GEMINI_API_KEY`, valeur = ta clé Gemini.
-3. Copier l'adresse du Worker (`https://xxx.workers.dev`) dans `docs/config.js` (`WORKER_URL`).
+### Déploiement automatique du relais
+
+Le relais est déployé par GitHub Actions (`.github/workflows/worker.yml`) à chaque modification de `worker/`. Une seule fois :
+
+1. Cloudflare › Manage account › Account API tokens › Create token › modèle **Edit Cloudflare Workers** › Create.
+2. GitHub › Settings › Secrets and variables › Actions : `CLOUDFLARE_API_TOKEN` (le jeton) et `CLOUDFLARE_ACCOUNT_ID` (l'identifiant du compte Cloudflare).
+3. Le secret `GEMINI_API_KEY` du Worker (réglé dans le tableau de bord Cloudflare) est conservé à chaque déploiement.
+4. Actions › Relais Cloudflare › Run workflow.
+
+Le workflow crée au besoin le stockage KV `clair-push` (abonnements aux notifications et clés VAPID, générées automatiquement).
+
+### Notifications
+
+- L'app s'abonne depuis Mon dosage (sur iPhone : app ajoutée à l'écran d'accueil, iOS 16.4+).
+- Chaque matin (5 h 35 et 6 h 35 UTC), le relais lit `edition.json` et, s'il y a une nouvelle édition, envoie « Ton édition est prête » à chaque abonné, dans sa langue.
