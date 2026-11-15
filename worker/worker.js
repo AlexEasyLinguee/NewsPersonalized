@@ -2,10 +2,12 @@
 // 1. POST /profile : transforme le texte « Parle-moi de toi » en profil structuré (via Gemini).
 //    La clé Gemini reste ici (secret GEMINI_API_KEY), jamais dans l'app. Le texte n'est pas stocké.
 // 2. /push/* : abonnements aux notifications, gardés dans le stockage KV « CLAIR ».
-// 3. Tâche planifiée : chaque matin, une notification « Ton édition est prête » à tous les abonnés.
+// 3. /me, /friends, /share, /inbox : amis et partage d'articles (voir friends.js).
+// 4. Tâche planifiée : chaque matin, une notification « Ton édition est prête » à tous les abonnés.
 // Déployé automatiquement par GitHub Actions (.github/workflows/worker.yml).
 
 import { generateVapid, sendPush } from './webpush.js';
+import { handleFriends, linkPush } from './friends.js';
 
 const ALLOWED_ORIGINS = ['https://alexeasylinguee.github.io'];
 const GEMINI = 'https://generativelanguage.googleapis.com/v1beta';
@@ -153,7 +155,9 @@ async function handlePush(path, request, env, origin) {
     const sub = body.subscription;
     if (!sub || !/^https:\/\//.test(sub.endpoint || '') || !sub.keys?.p256dh || !sub.keys?.auth) return json({ error: 'Abonnement invalide' }, 400, origin);
     const lang = body.lang === 'en' ? 'en' : 'fr';
-    await env.CLAIR.put(await subKey(sub.endpoint), JSON.stringify({ sub: { endpoint: sub.endpoint, keys: { p256dh: sub.keys.p256dh, auth: sub.keys.auth } }, lang, at: new Date().toISOString() }));
+    const key = await subKey(sub.endpoint);
+    if (body.token) await linkPush(env, String(body.token), key, lang);
+    await env.CLAIR.put(key, JSON.stringify({ sub: { endpoint: sub.endpoint, keys: { p256dh: sub.keys.p256dh, auth: sub.keys.auth } }, lang, at: new Date().toISOString() }));
     if (body.test) {
       const tx = PUSH_TEXT[lang];
       const status = await sendPush(sub, { title: 'Clair', body: tx.test, url: APP_URL }, await getVapid(env), PUSH_SUBJECT).catch(() => 0);
@@ -211,12 +215,19 @@ async function handleProfile(request, env, origin) {
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const origin = request.headers.get('Origin') || '';
     if (!ALLOWED_ORIGINS.includes(origin)) return new Response('Forbidden', { status: 403 });
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors(origin) });
     const path = new URL(request.url).pathname.replace(/\/+$/, '') || '/';
     if (path.startsWith('/push/')) return handlePush(path, request, env, origin);
+    if (/^\/(me|friends)\/|^\/(share|inbox)$/.test(path)) {
+      if (!env.CLAIR) return json({ error: 'Stockage non configuré.' }, 503, origin);
+      let body = {};
+      try { body = await request.json(); } catch { /* corps invalide */ }
+      const [status, data] = await handleFriends(path, body, env, ctx, { vapidOf: getVapid, subject: PUSH_SUBJECT, appUrl: APP_URL });
+      return json(data, status, origin);
+    }
     if (request.method !== 'POST') return json({ error: 'Méthode non autorisée' }, 405, origin);
     return handleProfile(request, env, origin);
   },

@@ -147,6 +147,19 @@
   .seg.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .lang-top { display: flex; justify-content: flex-end; margin-bottom: 18px; }
   .lang-top .seg { width: 220px; }
+  /* Amis */
+  nav.tabs button { max-width: 110px; font-size: 11px !important; white-space: nowrap; }
+  .tab-icon { position: relative; display: inline-flex; }
+  .badge { position: absolute; top: -6px; right: -10px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: #E11D48; color: #fff; font-size: 10px; font-weight: 800; line-height: 16px; text-align: center; }
+  .code-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+  .friend-code { font-family: var(--display); font-size: 30px; letter-spacing: 2px; color: var(--green); }
+  .shared-note { margin: 0; font-size: 15px; font-style: italic; color: var(--mint); }
+  .shared-note.dark { color: var(--green); }
+  .card.unread { box-shadow: inset 4px 0 0 #22C55E; }
+  .sheet { position: fixed; inset: 0; z-index: 40; background: rgba(15, 29, 25, 0.45); display: flex; align-items: flex-end; justify-content: center; }
+  .sheet-card { width: 100%; max-width: 520px; background: var(--ground); color: var(--ink); border-radius: 22px 22px 0 0; padding: 22px 20px calc(20px + env(safe-area-inset-bottom)); }
+  .sheet-card h2 { margin: 0 0 6px; font-family: var(--display); font-size: 24px; }
+  .sheet-card textarea { margin-top: 12px; width: 100%; min-height: 80px; border-radius: 14px; border: 1.5px solid #D7DDDA; padding: 12px; font: inherit; font-size: 16px; background: #fff; resize: none; }
   .toast { position: fixed; left: 50%; bottom: calc(var(--tabs-h) + 16px); transform: translateX(-50%); background: var(--ink); color: #fff; padding: 10px 16px; border-radius: 12px; font-size: 14px; font-weight: 600; z-index: 20; max-width: 90vw; text-align: center; }
 </style>
 </head>
@@ -185,6 +198,10 @@
     <div class="wrap profile-form" id="profil-body"></div>
   </section>
 
+  <section id="amis" class="screen" aria-label="Amis">
+    <div class="wrap settings" id="amis-body"></div>
+  </section>
+
   <section id="favoris" class="screen" aria-label="Mes favoris">
     <div class="wrap">
       <header class="top"><h1 data-i18n="fav_title">Mes favoris</h1><p class="sub" data-i18n="fav_sub">Les cartes que tu as gardées.</p></header>
@@ -198,11 +215,15 @@
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M5 6h14M5 12h14M5 18h9"/></svg><span data-i18n="tab_ess">L'essentiel</span></button>
   <button type="button" data-tab="fil">
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="3" width="12" height="18" rx="3"/></svg><span data-i18n="tab_fil">Le fil</span></button>
+  <button type="button" data-tab="amis">
+    <span class="tab-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="8" r="3.2"/><path d="M3 20c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5"/><circle cx="17" cy="9" r="2.6"/><path d="M16.5 14.6c2.6.3 4.5 2.2 4.5 4.9"/></svg><b id="amis-badge" class="badge hidden">0</b></span><span data-i18n="tab_amis">Amis</span></button>
   <button type="button" data-tab="favoris">
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M6 3h12v18l-6-4-6 4z"/></svg><span data-i18n="tab_fav">Favoris</span></button>
   <button type="button" data-tab="reglages">
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg><span data-i18n="tab_set">Mon dosage</span></button>
 </nav>
+
+<div id="sheet" class="sheet hidden" role="dialog" aria-modal="true" aria-label="Envoyer à un ami"><div class="sheet-card" id="sheet-body"></div></div>
 
 <script type="module" src="app.js"></script>
 </body>

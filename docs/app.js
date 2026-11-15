@@ -12,6 +12,7 @@ const ICONS = {
   bigCheck: '<svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
   bell: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#0B6E53" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z"/><path d="M10 21h4"/></svg>',
   flame: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#B45309" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21c-3.9 0-6.5-2.6-6.5-6.2 0-3.4 2.4-5.4 3.6-8.3.4 1.9 1.4 3 2.6 3.6C11.6 7 13 4.5 15 3c-.3 2.8 3.5 5.5 3.5 10.8 0 4.4-2.8 7.2-6.5 7.2z"/></svg>',
+  send: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 3 10 14M21 3l-7 18-4-7-7-4z"/></svg>',
   arrow: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>',
 };
 
@@ -28,6 +29,10 @@ let favs = store.get('favs', []);
 let readLog = store.get('readLog', {}); // { 'AAAA-MM-JJ': [url, …] }
 let edition = null;
 let sel = { essentiel: [], fil: [] };
+let me = store.get('me', null);            // { token, code, name } : identité pour les amis
+let friends = store.get('friends', []);    // [{ code, name }]
+let inbox = store.get('inbox', []);        // articles reçus de tes amis
+let seenShares = store.get('seenShares', []);
 
 const $ = (q) => document.querySelector(q);
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -59,9 +64,27 @@ function toast(msg) {
   document.body.appendChild(el);
   setTimeout(() => el.remove(), 2600);
 }
+// Articles reçus d'amis, pas encore vus (7 derniers jours) : ils ouvrent le fil.
+function sharedForFeed() {
+  const week = Date.now() - 7 * 24 * 3600e3;
+  return inbox.filter((x) => !seenShares.includes(x.id) && Date.parse(x.at) > week && x.item?.url)
+    .map((x) => ({ ...x.item, id: `share-${x.id}`, shareId: x.id, shared: { from: x.from, note: x.note }, tone: 'positive', importance: 10 }));
+}
+function computeSel() {
+  sel = select(edition || { items: [] }, settings);
+  const shared = sharedForFeed();
+  const urls = new Set(shared.map((i) => i.url));
+  sel.fil = [...shared, ...sel.fil.filter((i) => !urls.has(i.url))];
+}
+function markShareSeen(id) {
+  if (!id || seenShares.includes(id)) return;
+  seenShares = [...seenShares, id].slice(-300);
+  store.set('seenShares', seenShares);
+  updateBadge();
+}
 function saveSettings() {
   store.set('settings', settings);
-  sel = select(edition || { items: [] }, settings);
+  computeSel();
   renderEssentiel();
   renderFeed();
 }
@@ -149,6 +172,7 @@ function reward(idx, withFeedback) {
   const item = sel.fil[idx];
   if (!item || rewarded.has(idx)) return;
   rewarded.add(idx);
+  if (item.shareId) markShareSeen(item.shareId);
   if (!markRead(item)) return; // déjà lu plus tôt aujourd'hui : pas de deuxième coche
   const done = sel.fil.length > 0 && sel.fil.every((_, k) => rewarded.has(k) || (readLog[dayKey()] || []).includes(sel.fil[k].url));
   const big = done && idx === sel.fil.length - 1;
@@ -184,7 +208,7 @@ async function enablePush() {
   const res = await fetch(`${PUSH_BASE}/push/subscribe`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ subscription: sub.toJSON(), lang: settings.lang, test: true }),
+    body: JSON.stringify({ subscription: sub.toJSON(), lang: settings.lang, test: true, token: me?.token }),
   });
   if (!res.ok) throw new Error(t('push_error'));
   store.set('push', true);
@@ -202,7 +226,7 @@ async function syncPushLang() {
   if (pushState() !== 'on') return;
   const reg = await navigator.serviceWorker.getRegistration();
   const sub = reg && (await reg.pushManager.getSubscription());
-  if (sub) fetch(`${PUSH_BASE}/push/subscribe`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ subscription: sub.toJSON(), lang: settings.lang }) }).catch(() => {});
+  if (sub) fetch(`${PUSH_BASE}/push/subscribe`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ subscription: sub.toJSON(), lang: settings.lang, token: me?.token }) }).catch(() => {});
 }
 async function togglePush(btn, after) {
   btn.disabled = true;
@@ -236,6 +260,7 @@ function show(tab) {
   if (tab === 'reglages') renderSettings();
   if (tab === 'profil') renderProfileForm();
   if (tab === 'favoris') renderFavs();
+  if (tab === 'amis') { renderAmis(); refreshInbox(); }
   if (tab === 'fil') updateProgress();
   window.scrollTo(0, 0);
 }
@@ -286,12 +311,14 @@ function slide(item, i) {
   return `<article class="slide" data-i="${i}" data-cat="${esc(catLabel(item.category))}">
     <div class="media">${img}</div>
     <div class="slide-body">
-      ${item.why ? `<span class="why">${esc(t('why', item.why))}</span>` : ''}
+      ${item.shared ? `<span class="why">${esc(t('shared_by', item.shared.from))}</span>${item.shared.note ? `<p class="shared-note">« ${esc(item.shared.note)} »</p>` : ''}`
+        : item.why ? `<span class="why">${esc(t('why', item.why))}</span>` : ''}
       <h2>${esc(tx(item, 'title'))}</h2>
       <p>${esc(tx(item, 'summary'))}</p>
       <p class="meta">${esc(item.source)} · ${esc(ago(item.published))} · <a href="${esc(safeUrl(item.url))}" target="_blank" rel="noopener">${esc(t('read_article'))}</a></p>
       <div class="actions">
         <button type="button" class="icon-btn${fav ? ' on' : ''}" data-act="fav" data-i="${i}" aria-label="${esc(t('a_save'))}" aria-pressed="${fav}">${ICONS.heart}</button>
+        <button type="button" class="icon-btn" data-act="send" data-i="${i}" aria-label="${esc(t('a_send'))}">${ICONS.send}</button>
         <button type="button" class="icon-btn" data-act="share" data-i="${i}" aria-label="${esc(t('a_share'))}">${ICONS.share}</button>
         <button type="button" class="pill-btn" data-act="less" data-i="${i}">${esc(t('a_less'))}</button>
       </div>
@@ -372,6 +399,7 @@ feedEl.addEventListener('click', async (e) => {
   if (act === 'favs') return show('favoris');
   if (act === 'push') return togglePush(btn, refreshEndStats);
   if (!item) return;
+  if (act === 'send') return openSendSheet(item);
   if (act === 'fav') {
     if (isFav(item.url)) favs = favs.filter((f) => f.url !== item.url);
     else favs = [{ ...item, savedAt: new Date().toISOString() }, ...favs].slice(0, 200);
@@ -624,13 +652,199 @@ $('#profil-body').addEventListener('click', async (e) => {
   }
 });
 
+/* ---------- Amis et partage ---------- */
+async function api(path, body) {
+  const res = await fetch(`${PUSH_BASE}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(20000) });
+  const data = await res.json().catch(() => ({}));
+  if (res.status === 401) { me = null; store.set('me', null); }
+  if (!res.ok) { const e = new Error(data.error || String(res.status)); e.code = data.error; throw e; }
+  return data;
+}
+const inviteUrl = () => `${location.origin}${location.pathname}#ami=${me.code.replace('-', '')}`;
+function updateBadge() {
+  const n = inbox.filter((x) => !seenShares.includes(x.id)).length;
+  const b = $('#amis-badge');
+  if (b) { b.textContent = n; b.classList.toggle('hidden', !n); }
+}
+async function refreshInbox() {
+  if (!me || !WORKER_URL) return;
+  try {
+    const [box, fl] = await Promise.all([api('/inbox', { token: me.token }), api('/friends/list', { token: me.token })]);
+    const before = inbox.map((x) => x.id).join();
+    inbox = box.items || [];
+    friends = fl.friends || [];
+    store.set('inbox', inbox);
+    store.set('friends', friends);
+    updateBadge();
+    if (inbox.map((x) => x.id).join() !== before && edition) { computeSel(); renderEssentiel(); if (!$('#fil').classList.contains('active')) renderFeed(); }
+    if ($('#amis').classList.contains('active')) renderAmis();
+  } catch { /* hors ligne : on garde le cache */ }
+}
+async function addFriend(code) {
+  try {
+    const { friend } = await api('/friends/add', { token: me.token, code });
+    if (!friends.some((f) => f.code === friend.code)) friends = [...friends, friend];
+    store.set('friends', friends);
+    toast(t('friend_added', friend.name));
+    return true;
+  } catch (e) {
+    toast(e.code === 'self' ? t('friend_self') : e.code === 'code' ? t('friend_unknown') : t('friends_error'));
+    return false;
+  }
+}
+function sharedCard(x) {
+  const it = x.item || {};
+  return `<a class="card${seenShares.includes(x.id) ? '' : ' unread'}" href="${esc(safeUrl(it.url))}" target="_blank" rel="noopener" data-share="${esc(x.id)}">
+    <div class="chips"><span class="chip good">${esc(t('from_friend', x.from))}</span><span class="reason">${esc(ago(x.at))}</span></div>
+    ${x.note ? `<p class="shared-note dark">« ${esc(x.note)} »</p>` : ''}
+    <h2>${esc(tx(it, 'title'))}</h2><p>${esc(tx(it, 'summary') || '')}</p>
+  </a>`;
+}
+function renderAmis() {
+  const box = $('#amis-body');
+  if (!WORKER_URL) { box.innerHTML = `<h1>${esc(t('amis_title'))}</h1><div class="empty">${esc(t('pf_soon'))}</div>`; return; }
+  if (!me) {
+    box.innerHTML = `
+      <h1>${esc(t('amis_title'))}</h1>
+      <p class="sub" style="margin:8px 0 18px">${esc(t('amis_intro'))}</p>
+      <form id="me-form" class="add-row" style="margin:0">
+        <label class="hidden" for="me-name">${esc(t('your_name'))}</label>
+        <input id="me-name" maxlength="30" placeholder="${esc(t('your_name'))}" autocomplete="given-name" value="${esc(store.get('pendingName', ''))}">
+        <button type="submit">${esc(t('start'))}</button>
+      </form>
+      <p class="small" style="margin-top:12px;line-height:1.5">${esc(t('amis_privacy'))}</p>`;
+    return;
+  }
+  const shared = inbox;
+  box.innerHTML = `
+    <h1>${esc(t('amis_title'))}</h1>
+    <section class="profile-box" style="margin-top:14px">
+      <p class="small" style="margin:0 0 4px">${esc(t('your_code'))}</p>
+      <div class="code-row"><b class="friend-code">${esc(me.code)}</b><span class="small">${esc(me.name)}</span></div>
+      <div class="tags" style="margin-top:12px">
+        <button type="button" class="toggle" data-invite aria-pressed="true">${esc(t('invite'))}</button>
+        <button type="button" class="toggle" data-copy>${esc(t('copy_code'))}</button>
+      </div>
+    </section>
+    <section style="margin-top:20px">
+      <h2>${esc(t('my_friends'))}</h2>
+      <div class="tags">${friends.map((f) => `<span class="tag">${esc(f.name)}<button type="button" data-unfriend="${esc(f.code)}" aria-label="${esc(t('remove', f.name))}">×</button></span>`).join('') || `<p class="small" style="margin:0">${esc(t('no_friends'))}</p>`}</div>
+      <form class="add-row" id="friend-form">
+        <label class="hidden" for="friend-code">${esc(t('friend_code_label'))}</label>
+        <input id="friend-code" maxlength="8" placeholder="${esc(t('friend_code_ph'))}" autocomplete="off" autocapitalize="characters">
+        <button type="submit">${esc(t('add'))}</button>
+      </form>
+    </section>
+    <section style="margin-top:22px" id="recus">
+      <h2>${esc(t('received'))}</h2>
+      <div class="list" style="padding:0">${shared.map(sharedCard).join('') || `<div class="empty" style="margin:0">${esc(t('no_received'))}</div>`}</div>
+    </section>`;
+}
+$('#amis-body').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  if (e.target.id === 'me-form') {
+    const name = $('#me-name').value.trim();
+    if (!name) return;
+    try {
+      const r = await api('/me/register', { name, lang: settings.lang });
+      me = { token: r.token, code: r.code, name: r.name };
+      store.set('me', me);
+      syncPushLang(); // relie les notifications à ce profil d'ami
+      const pending = store.get('pendingFriend', '');
+      if (pending) { store.set('pendingFriend', ''); await addFriend(pending); }
+    } catch { toast(t('friends_error')); }
+    renderAmis();
+  } else if (e.target.id === 'friend-form') {
+    const code = $('#friend-code').value.trim();
+    if (code && (await addFriend(code))) renderAmis();
+  }
+});
+$('#amis-body').addEventListener('click', async (e) => {
+  const card = e.target.closest('[data-share]');
+  if (card) markShareSeen(card.dataset.share);
+  const b = e.target.closest('button');
+  if (!b) return;
+  if (b.hasAttribute('data-invite')) {
+    const text = t('invite_text', me.code);
+    if (navigator.share) { try { await navigator.share({ title: 'Clair', text, url: inviteUrl() }); } catch { /* annulé */ } }
+    else { try { await navigator.clipboard.writeText(`${text} ${inviteUrl()}`); toast(t('toast_copied')); } catch { toast(inviteUrl()); } }
+  } else if (b.hasAttribute('data-copy')) {
+    try { await navigator.clipboard.writeText(me.code); toast(t('code_copied')); } catch { toast(me.code); }
+  } else if (b.dataset.unfriend) {
+    const f = friends.find((x) => x.code === b.dataset.unfriend);
+    if (!f || !confirm(t('unfriend_confirm', f.name))) return;
+    try { await api('/friends/remove', { token: me.token, code: f.code }); } catch { /* */ }
+    friends = friends.filter((x) => x.code !== f.code);
+    store.set('friends', friends);
+    renderAmis();
+  }
+});
+
+// Feuille « Envoyer à un ami »
+let sending = null;
+function openSendSheet(item) {
+  sending = item;
+  const sheet = $('#sheet');
+  const ready = me && friends.length;
+  $('#sheet-body').innerHTML = ready ? `
+    <h2>${esc(t('send_title'))}</h2>
+    <p class="small" style="margin:0 0 12px">${esc(tx(item, 'title'))}</p>
+    <div class="tags">${friends.map((f, k) => `<button type="button" class="toggle" data-pick="${k}" aria-pressed="${friends.length === 1}">${esc(f.name)}</button>`).join('')}</div>
+    <label class="hidden" for="send-note">${esc(t('send_note_ph'))}</label>
+    <textarea id="send-note" maxlength="280" placeholder="${esc(t('send_note_ph'))}"></textarea>
+    <button type="button" class="cta" data-send style="margin:14px 0 0;width:100%">${esc(t('send_btn'))}</button>
+    <button type="button" class="link-btn" data-close>${esc(t('pf_cancel'))}</button>` : `
+    <h2>${esc(t('send_title'))}</h2>
+    <p class="desc" style="margin:0 0 16px">${esc(me ? t('send_no_friends') : t('send_no_me'))}</p>
+    <button type="button" class="cta" data-goamis style="margin:0;width:100%">${esc(t('go_amis'))}</button>
+    <button type="button" class="link-btn" data-close>${esc(t('pf_cancel'))}</button>`;
+  sheet.classList.remove('hidden');
+}
+function closeSheet() { $('#sheet').classList.add('hidden'); sending = null; }
+$('#sheet').addEventListener('click', async (e) => {
+  if (e.target.id === 'sheet') return closeSheet();
+  const b = e.target.closest('button');
+  if (!b) return;
+  if (b.hasAttribute('data-close')) return closeSheet();
+  if (b.hasAttribute('data-goamis')) { closeSheet(); return show('amis'); }
+  if (b.dataset.pick) return b.setAttribute('aria-pressed', String(b.getAttribute('aria-pressed') !== 'true'));
+  if (b.hasAttribute('data-send')) {
+    const to = [...document.querySelectorAll('#sheet [data-pick][aria-pressed="true"]')].map((x) => friends[Number(x.dataset.pick)]);
+    if (!to.length) return toast(t('send_pick'));
+    b.disabled = true;
+    const { shared, why, score, group, id, shareId, ...item } = sending;
+    try {
+      await api('/share', { token: me.token, to: to.map((f) => f.code), item, note: $('#send-note').value.trim() });
+      toast(t('sent_to', to.map((f) => f.name).join(', ')));
+      haptic(); ding();
+      closeSheet();
+    } catch { b.disabled = false; toast(t('friends_error')); }
+  }
+});
+
+// Lien d'invitation (#ami=CODE) et ouverture depuis une notification de partage (#recus)
+function handleHash() {
+  const m = location.hash.match(/ami=([A-Za-z0-9-]{6,7})/);
+  if (m) {
+    history.replaceState(null, '', location.pathname);
+    if (me) addFriend(m[1]).then(() => renderAmis());
+    else store.set('pendingFriend', m[1]);
+    show('amis');
+  } else if (location.hash === '#recus') {
+    history.replaceState(null, '', location.pathname);
+    show('amis');
+  }
+}
+window.addEventListener('hashchange', handleHash);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') refreshInbox(); });
+
 /* ---------- Démarrage ---------- */
 async function load() {
   try {
     const res = await fetch(`edition.json?t=${Date.now()}`, { cache: 'no-store' });
     if (!res.ok) throw new Error(res.status);
     edition = await res.json();
-    sel = select(edition, settings);
+    computeSel();
     renderEssentiel();
     renderFeed();
   } catch {
@@ -642,5 +856,7 @@ async function load() {
 applyLanguage();
 if (pushState() === 'on') navigator.serviceWorker.register('sw.js').catch(() => {});
 $('#ess-sub').textContent = t('loading');
-load();
+load().then(refreshInbox);
+updateBadge();
 if (!store.get('onboarded', false)) show('profil');
+else handleHash();

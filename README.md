@@ -55,3 +55,7 @@ Le workflow crée au besoin le stockage KV `clair-push` (abonnements aux notific
 
 - L'app s'abonne depuis Mon dosage (sur iPhone : app ajoutée à l'écran d'accueil, iOS 16.4+).
 - Chaque matin (5 h 35 et 6 h 35 UTC), le relais lit `edition.json` et, s'il y a une nouvelle édition, envoie « Ton édition est prête » à chaque abonné, dans sa langue.
+
+### Amis et partage
+
+Onglet **Amis** : chacun choisit un prénom et reçoit un code ami (ex. `K7P-3MX`), sans compte ni e-mail. On ajoute un ami avec son code ou son lien d'invitation (`…/#ami=CODE`) ; l'amitié est réciproque. Le bouton « Envoyer à un ami » sur chaque carte du fil envoie l'article (avec un petit mot) : il apparaît en tête du fil du destinataire et dans ses « Reçus », avec une notification s'il les a activées. Les articles partagés sont effacés du serveur après 30 jours.
