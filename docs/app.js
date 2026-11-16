@@ -43,8 +43,15 @@ const levelOf = (id) => L(LEVELS.find((l) => l.id === id) || LEVELS[1]);
 const topicLabel = (id) => (id === 'monde' ? t('topic_world') : catLabel(id));
 // Titre et résumé : version d'origine si demandé, sinon dans la langue de l'app
 // (repli sur le français pour les anciennes éditions).
-const tx = (item, f) => (settings.articleLang === 'original' && item[`orig_${f}`])
-  || (settings.lang === 'en' && item[`${f}_en`]) || item[f];
+const nrm = (x) => String(x || '').toLowerCase().replace(/[^a-z0-9à-ÿ]+/g, ' ').trim();
+function tx(item, f) {
+  if (settings.articleLang === 'original' && item.orig_title) {
+    if (f === 'title') return item.orig_title;
+    const sum = item.orig_summary || '';
+    return nrm(sum).startsWith(nrm(item.orig_title).slice(0, 40)) ? '' : sum; // pas de résumé qui répète le titre
+  }
+  return (settings.lang === 'en' && item[`${f}_en`]) || item[f];
+}
 
 function safeUrl(u) {
   try { const x = new URL(u); return /^https?:$/.test(x.protocol) ? x.href : '#'; } catch { return '#'; }
@@ -296,6 +303,7 @@ function renderEssentiel() {
   $('#ess-date').textContent = date.charAt(0).toUpperCase() + date.slice(1);
   $('#ess-sub').textContent = t('ess_sub', sel.essentiel.length);
   const ageH = (Date.now() - d.getTime()) / 3600e3;
+  $('#ess-later').innerHTML = laterBlock();
   $('#ess-stale').innerHTML = !navigator.onLine ? `<div class="stale offline">${esc(t('offline_banner', date.toLowerCase()))}</div>`
     : ageH > 30 ? `<div class="stale">${esc(t('stale'))}</div>` : '';
   $('#ess-list').innerHTML = sel.essentiel.map(essCard).join('') || `<div class="empty">${esc(t('ess_empty'))}</div>`;
@@ -871,11 +879,44 @@ function offlineSection() {
       <button type="button" class="outline-btn" data-offline style="width:100%">${esc(t('offline_btn'))}</button>
     </section>`;
 }
-// Hors ligne, les liens vers les articles complets ne peuvent pas s'ouvrir : on prévient.
+// Hors ligne, un article complet ne peut pas s'ouvrir : on le met de côté
+// et on le propose dès que le réseau revient.
+let later = store.get('later', []);
+function findItem(url) {
+  return [...sel.essentiel, ...sel.fil, ...favs, ...inbox.map((x) => x.item || {})].find((i) => i && safeUrl(i.url) === url);
+}
 document.addEventListener('click', (e) => {
   const a = e.target.closest('a[target="_blank"]');
-  if (a && !navigator.onLine) { e.preventDefault(); toast(t('offline_link')); }
+  if (!a) return;
+  if (!navigator.onLine) {
+    e.preventDefault();
+    const it = findItem(a.href);
+    if (it && !later.some((x) => x.url === it.url)) {
+      const { shared, why, score, group, ...keep } = it;
+      later = [keep, ...later].slice(0, 30);
+      store.set('later', later);
+    }
+    toast(t('offline_saved_later'));
+  } else if (a.dataset.later) {
+    later = later.filter((x) => safeUrl(x.url) !== a.href);
+    store.set('later', later);
+    setTimeout(renderEssentiel, 300);
+  }
 }, true);
+function laterBlock() {
+  if (!navigator.onLine || !later.length) return '';
+  return `<section class="later">
+    <h2>${esc(t('later_title', later.length))}</h2>
+    ${later.map((i) => `<a class="later-item" data-later="1" href="${esc(safeUrl(i.url))}" target="_blank" rel="noopener"><b>${esc(tx(i, 'title'))}</b><span>${esc(i.source || '')}</span></a>`).join('')}
+    <button type="button" class="link-btn" id="later-clear" style="margin:4px 0 0">${esc(t('later_clear'))}</button>
+  </section>`;
+}
+document.addEventListener('click', (e) => {
+  if (e.target.id !== 'later-clear') return;
+  later = [];
+  store.set('later', later);
+  renderEssentiel();
+});
 window.addEventListener('online', () => { renderEssentiel(); refreshInbox(); });
 window.addEventListener('offline', renderEssentiel);
 

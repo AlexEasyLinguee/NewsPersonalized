@@ -206,6 +206,17 @@ function mockScore(batch) {
   }));
 }
 
+// Résumé d'origine : vide s'il ne fait que répéter le titre (cas de Google News),
+// sinon coupé proprement en fin de phrase ou de mot.
+function cleanSummary(title, desc) {
+  const n = (x) => x.toLowerCase().replace(/[^a-z0-9à-ÿ]+/g, ' ').trim();
+  if (!desc || n(desc).startsWith(n(title).slice(0, 40))) return '';
+  if (desc.length <= 280) return desc;
+  const cut = desc.slice(0, 280);
+  const end = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf('! '), cut.lastIndexOf('? '));
+  return end > 120 ? cut.slice(0, end + 1) : `${cut.slice(0, cut.lastIndexOf(' '))}…`;
+}
+
 function clean(r, src) {
   const imp = Math.max(0, Math.min(10, Math.round(Number(r.importance) || 0)));
   const tone = ['positive', 'neutral', 'negative'].includes(r.tone) ? r.tone : 'neutral';
@@ -216,7 +227,7 @@ function clean(r, src) {
     summary: String(r.summary_fr || src.desc).slice(0, 300),
     title_en: r.title_en ? String(r.title_en).slice(0, 140) : undefined,
     orig_title: src.title.slice(0, 160),
-    orig_summary: src.desc.slice(0, 300),
+    orig_summary: cleanSummary(src.title, src.desc),
     summary_en: r.summary_en ? String(r.summary_en).slice(0, 300) : undefined,
     url: src.url,
     image: src.image,

@@ -160,6 +160,11 @@
   .sheet-card { width: 100%; max-width: 520px; background: var(--ground); color: var(--ink); border-radius: 22px 22px 0 0; padding: 22px 20px calc(20px + env(safe-area-inset-bottom)); }
   .sheet-card h2 { margin: 0 0 6px; font-family: var(--display); font-size: 24px; }
   .sheet-card textarea { margin-top: 12px; width: 100%; min-height: 80px; border-radius: 14px; border: 1.5px solid #D7DDDA; padding: 12px; font: inherit; font-size: 16px; background: #fff; resize: none; }
+  .later { margin: 0 16px 12px; padding: 14px 16px; border-radius: 16px; background: var(--green-soft); }
+  .later h2 { margin: 0 0 8px; font-size: 15px; color: #08523E; }
+  .later-item { display: flex; flex-direction: column; gap: 2px; padding: 10px 0; border-top: 1px solid #BFE3D3; text-decoration: none; color: var(--ink); }
+  .later-item b { font-size: 15px; line-height: 1.3; }
+  .later-item span { font-size: 12px; color: var(--muted); }
   .stale.offline { background: #E6EAE7; color: var(--ink); }
   .toast { position: fixed; left: 50%; bottom: calc(var(--tabs-h) + 16px); transform: translateX(-50%); background: var(--ink); color: #fff; padding: 10px 16px; border-radius: 12px; font-size: 14px; font-weight: 600; z-index: 20; max-width: 90vw; text-align: center; }
 </style>
@@ -176,6 +181,7 @@
         <p class="sub" id="ess-sub"></p>
       </header>
       <div id="ess-stale"></div>
+      <div id="ess-later"></div>
       <div class="list" id="ess-list"></div>
       <button class="cta" id="go-fil" type="button"></button>
     </div>
