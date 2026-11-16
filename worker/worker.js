@@ -8,6 +8,7 @@
 
 import { generateVapid, sendPush } from './webpush.js';
 import { handleFriends, linkPush } from './friends.js';
+import { handleRead } from './reader.js';
 
 const ALLOWED_ORIGINS = ['https://alexeasylinguee.github.io'];
 const GEMINI = 'https://generativelanguage.googleapis.com/v1beta';
@@ -221,6 +222,12 @@ export default {
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors(origin) });
     const path = new URL(request.url).pathname.replace(/\/+$/, '') || '/';
     if (path.startsWith('/push/')) return handlePush(path, request, env, origin);
+    if (path === '/read') {
+      let body = {};
+      try { body = await request.json(); } catch { /* corps invalide */ }
+      const [status, data] = await handleRead(body, { editionUrl: EDITION_URL });
+      return json(data, status, origin);
+    }
     if (/^\/(me|friends)\/|^\/(share|inbox)$/.test(path)) {
       if (!env.CLAIR) return json({ error: 'Stockage non configuré.' }, 503, origin);
       let body = {};

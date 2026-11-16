@@ -59,3 +59,7 @@ Le workflow crée au besoin le stockage KV `clair-push` (abonnements aux notific
 ### Amis et partage
 
 Onglet **Amis** : chacun choisit un prénom et reçoit un code ami (ex. `K7P-3MX`), sans compte ni e-mail. On ajoute un ami avec son code ou son lien d'invitation (`…/#ami=CODE`) ; l'amitié est réciproque. Le bouton « Envoyer à un ami » sur chaque carte du fil envoie l'article (avec un petit mot) : il apparaît en tête du fil du destinataire et dans ses « Reçus », avec une notification s'il les a activées. Les articles partagés sont effacés du serveur après 30 jours.
+
+### Articles complets hors ligne
+
+Bouton « Télécharger les articles pour lire hors ligne » (Mon dosage › Hors ligne), et automatiquement pour les favoris : l'app demande au relais (`worker/reader.js`, route `/read`) le texte de chaque article, et le garde sur le téléphone (Cache API). Le relais n'accepte que les sites présents dans l'édition du jour et ne stocke rien. Hors ligne, toucher un article ouvre le lecteur intégré. Usage personnel : une version commerciale demanderait des accords avec les médias.

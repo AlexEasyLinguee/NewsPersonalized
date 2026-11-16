@@ -294,6 +294,7 @@ function essCard(item) {
     <div class="chips">${chipFor(item)}<span class="reason">${esc(reasonText(item))}</span></div>
     <h2>${esc(tx(item, 'title'))}</h2>
     <p>${esc(tx(item, 'summary'))}</p>
+    ${readerChip(item)}
   </a>`;
 }
 function renderEssentiel() {
@@ -324,7 +325,7 @@ function slide(item, i) {
         : item.why ? `<span class="why">${esc(t('why', item.why))}</span>` : ''}
       <h2>${esc(tx(item, 'title'))}</h2>
       <p>${esc(tx(item, 'summary'))}</p>
-      <p class="meta">${esc(item.source)} · ${esc(ago(item.published))} · <a href="${esc(safeUrl(item.url))}" target="_blank" rel="noopener">${esc(t('read_article'))}</a></p>
+      <p class="meta">${esc(item.source)} · ${esc(ago(item.published))} · <a href="${esc(safeUrl(item.url))}" target="_blank" rel="noopener">${esc(t('read_article'))}</a>${hasArticle(item.url) ? ` · <a href="#" data-reader="${esc(safeUrl(item.url))}">${esc(t('read_here'))}</a>` : ''}</p>
       <div class="actions">
         <button type="button" class="icon-btn${fav ? ' on' : ''}" data-act="fav" data-i="${i}" aria-label="${esc(t('a_save'))}" aria-pressed="${fav}">${ICONS.heart}</button>
         <button type="button" class="icon-btn" data-act="send" data-i="${i}" aria-label="${esc(t('a_send'))}">${ICONS.send}</button>
@@ -414,6 +415,7 @@ feedEl.addEventListener('click', async (e) => {
     else favs = [{ ...item, savedAt: new Date().toISOString() }, ...favs].slice(0, 200);
     store.set('favs', favs);
     const on = isFav(item.url);
+    if (on) saveArticle(item); // texte complet gardé pour le hors-ligne
     btn.classList.toggle('on', on);
     btn.setAttribute('aria-pressed', String(on));
     toast(on ? t('toast_fav_on') : t('toast_fav_off'));
@@ -434,7 +436,7 @@ function renderFavs() {
   $('#fav-list').innerHTML = favs.length
     ? favs.map((f) => `<a class="card" href="${esc(safeUrl(f.url))}" target="_blank" rel="noopener">
         <div class="chips"><span class="chip good">${esc(f.category ? catLabel(f.category) : t('fav_tag'))}</span><span class="reason">${esc(f.source)}</span></div>
-        <h2>${esc(tx(f, 'title'))}</h2><p>${esc(tx(f, 'summary'))}</p></a>`).join('')
+        <h2>${esc(tx(f, 'title'))}</h2><p>${esc(tx(f, 'summary'))}</p>${readerChip(f)}</a>`).join('')
     : `<div class="empty">${esc(t('fav_empty'))}</div>`;
 }
 
@@ -529,7 +531,7 @@ $('#settings').addEventListener('click', (e) => {
   if (!b) return;
   if (b.hasAttribute('data-edit-profile')) return show('profil');
   if (b.hasAttribute('data-push')) return togglePush(b, renderSettings);
-  if (b.hasAttribute('data-offline')) { b.disabled = true; b.textContent = t('offline_working'); return precacheEdition(true); }
+  if (b.hasAttribute('data-offline')) return downloadAll(b);
   if (b.dataset.lang) setLanguage(b.dataset.lang);
   else if (b.dataset.artlang) settings.articleLang = b.dataset.artlang;
   else if (b.dataset.fx) {
@@ -872,13 +874,107 @@ if ('serviceWorker' in navigator) {
 }
 function offlineSection() {
   const ready = offlineInfo && edition && offlineInfo.edition === edition.generated_at;
+  const all = currentItems();
+  const n = all.filter((i) => hasArticle(i.url)).length;
   return `<section>
       <h2>${esc(t('offline_title'))}</h2>
       <p class="hint">${esc(ready ? t('offline_ready', sel.essentiel.length + sel.fil.length) : t('offline_hint'))}</p>
-      <p class="hint">${esc(t('offline_tip'))}</p>
-      <button type="button" class="outline-btn" data-offline style="width:100%">${esc(t('offline_btn'))}</button>
+      <p class="hint">${esc(t('offline_articles', n, all.length))}</p>
+      <button type="button" class="${n < all.length ? 'cta' : 'outline-btn'}" data-offline style="width:100%;margin:0">${esc(t('offline_btn'))}</button>
+      <p class="small" style="margin-top:10px;line-height:1.5">${esc(t('offline_tip'))}</p>
     </section>`;
 }
+
+/* ---------- Articles complets, lisibles hors ligne ---------- */
+const ART_CACHE = 'clair-articles-v1';
+const artKey = (url) => `https://clair.invalid/article?u=${encodeURIComponent(url)}`;
+let artIndex = store.get('artIndex', []);   // adresses des articles gardés, du plus récent au plus ancien
+let artFailed = new Set();                  // indisponibles (pour ne pas réessayer en boucle)
+function hasArticle(url) { return artIndex.includes(url); }
+function currentItems() {
+  const seen = new Set();
+  return [...sel.essentiel, ...sel.fil, ...favs].filter((i) => i.url && !seen.has(i.url) && seen.add(i.url));
+}
+async function saveArticle(item) {
+  if (!item?.url || hasArticle(item.url)) return true;
+  if (!WORKER_URL || !('caches' in window) || artFailed.has(item.url)) return false;
+  try {
+    const res = await fetch(`${PUSH_BASE}/read`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: item.url }), signal: AbortSignal.timeout(25000) });
+    if (!res.ok) { if (res.status === 422 || res.status === 403) artFailed.add(item.url); return false; }
+    const data = await res.json();
+    if (!Array.isArray(data.blocks) || !data.blocks.length) return false;
+    const cache = await caches.open(ART_CACHE);
+    await cache.put(artKey(item.url), new Response(JSON.stringify(data), { headers: { 'Content-Type': 'application/json' } }));
+    artIndex = [item.url, ...artIndex.filter((u) => u !== item.url)];
+    const keep = new Set(favs.map((f) => f.url));
+    while (artIndex.length > 150) {
+      const k = artIndex.findLastIndex((u) => !keep.has(u));
+      if (k < 0) break;
+      await cache.delete(artKey(artIndex[k]));
+      artIndex.splice(k, 1);
+    }
+    store.set('artIndex', artIndex);
+    return true;
+  } catch { return false; }
+}
+// Télécharge le texte complet de toute l'édition et des favoris (3 à la fois).
+async function downloadArticles(onProgress) {
+  const todo = currentItems().filter((i) => !hasArticle(i.url));
+  let done = 0;
+  const next = async () => {
+    const item = todo.shift();
+    if (!item) return;
+    await saveArticle(item);
+    onProgress(++done, done + todo.length);
+    return next();
+  };
+  await Promise.all([next(), next(), next()]);
+}
+async function downloadAll(btn) {
+  if (!navigator.onLine) return toast(t('offline_need_net'));
+  btn.disabled = true;
+  btn.textContent = t('offline_working');
+  precacheEdition(false);
+  const total = currentItems().length;
+  await downloadArticles((a, b) => { btn.textContent = t('offline_progress', a, b); });
+  const n = currentItems().filter((i) => hasArticle(i.url)).length;
+  toast(t('offline_done', n, total));
+  renderSettings();
+  renderEssentiel();
+  renderFeed();
+}
+function readerChip(item) {
+  return hasArticle(item.url) ? `<span class="chip offline-chip" role="button" data-reader="${esc(safeUrl(item.url))}">${esc(t('read_here'))}</span>` : '';
+}
+async function openReader(url) {
+  const item = findItem(url) || { url };
+  let data = null;
+  try { const hit = await (await caches.open(ART_CACHE)).match(artKey(item.url)); data = hit && (await hit.json()); } catch { /* */ }
+  if (!data) return false;
+  const source = item.source || new URL(item.url).hostname.replace(/^www\./, '');
+  $('#reader-body').innerHTML = `
+    <button type="button" class="link-btn reader-back" data-reader-close>‹ ${esc(t('reader_back'))}</button>
+    <p class="small" style="margin:8px 0 6px;font-weight:700;color:var(--green)">${esc(source)}</p>
+    <h1>${esc(data.title || tx(item, 'title') || '')}</h1>
+    ${data.partial ? `<p class="stale" style="margin:14px 0 0">${esc(t('reader_partial'))}</p>` : ''}
+    <div class="reader-text">${data.blocks.map((b) => (b.t === 'h' ? `<h2>${esc(b.text)}</h2>` : `<p>${esc(b.text)}</p>`)).join('')}</div>
+    <a class="outline-btn reader-orig" href="${esc(safeUrl(item.url))}" target="_blank" rel="noopener">${esc(t('reader_original', source))}</a>`;
+  const r = $('#reader');
+  r.classList.remove('hidden');
+  r.scrollTop = 0;
+  return true;
+}
+$('#reader').addEventListener('click', (e) => {
+  if (e.target.closest('[data-reader-close]')) $('#reader').classList.add('hidden');
+});
+document.addEventListener('click', (e) => {
+  const el = e.target.closest('[data-reader]');
+  if (!el) return;
+  e.preventDefault();
+  e.stopPropagation();
+  openReader(el.dataset.reader);
+}, true);
+
 // Hors ligne, un article complet ne peut pas s'ouvrir : on le met de côté
 // et on le propose dès que le réseau revient.
 let later = store.get('later', []);
@@ -888,8 +984,11 @@ function findItem(url) {
 document.addEventListener('click', (e) => {
   const a = e.target.closest('a[target="_blank"]');
   if (!a) return;
+  if (e.target.closest('[data-reader]')) return;
   if (!navigator.onLine) {
     e.preventDefault();
+    if (hasArticle(a.href) || artIndex.some((u) => safeUrl(u) === a.href)) { openReader(artIndex.find((u) => safeUrl(u) === a.href)); return; }
+    if (a.closest('#reader')) { toast(t('offline_need_net')); return; }
     const it = findItem(a.href);
     if (it && !later.some((x) => x.url === it.url)) {
       const { shared, why, score, group, ...keep } = it;
@@ -930,6 +1029,7 @@ async function load() {
     renderEssentiel();
     renderFeed();
     setTimeout(() => precacheEdition(false), 1500); // garde les photos du jour pour le hors-ligne
+    setTimeout(() => { if (navigator.onLine) favs.slice(0, 30).reduce((p, f) => p.then(() => saveArticle(f)), Promise.resolve()); }, 3000);
   } catch {
     $('#ess-sub').textContent = t('no_edition');
     $('#ess-list').innerHTML = `<div class="empty">${esc(t('no_edition_p'))}</div>`;
