@@ -434,11 +434,39 @@ feedEl.addEventListener('click', async (e) => {
 /* ---------- Favoris ---------- */
 function renderFavs() {
   $('#fav-list').innerHTML = favs.length
-    ? favs.map((f) => `<a class="card" href="${esc(safeUrl(f.url))}" target="_blank" rel="noopener">
-        <div class="chips"><span class="chip good">${esc(f.category ? catLabel(f.category) : t('fav_tag'))}</span><span class="reason">${esc(f.source)}</span></div>
-        <h2>${esc(tx(f, 'title'))}</h2><p>${esc(tx(f, 'summary'))}</p>${readerChip(f)}</a>`).join('')
+    ? favs.map((f, i) => `<div class="card fav-card">
+        <a class="fav-link" href="${esc(safeUrl(f.url))}" target="_blank" rel="noopener">
+          <div class="chips"><span class="chip good">${esc(f.category ? catLabel(f.category) : t('fav_tag'))}</span><span class="reason">${esc(f.source)}</span></div>
+          <h2>${esc(tx(f, 'title'))}</h2><p>${esc(tx(f, 'summary'))}</p>
+        </a>
+        <div class="fav-actions">
+          ${readerChip(f)}
+          <button type="button" class="fav-btn" data-fav-send="${i}">${ICONS.send}<span>${esc(t('a_send'))}</span></button>
+          <button type="button" class="fav-btn icon-only" data-fav-share="${i}" aria-label="${esc(t('a_share'))}">${ICONS.share}</button>
+          <button type="button" class="fav-btn icon-only" data-fav-remove="${i}" aria-label="${esc(t('toast_fav_off'))}">${ICONS.heart}</button>
+        </div>
+      </div>`).join('')
     : `<div class="empty">${esc(t('fav_empty'))}</div>`;
 }
+$('#fav-list').addEventListener('click', async (e) => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  if (b.dataset.favSend) return openSendSheet(favs[Number(b.dataset.favSend)]);
+  if (b.dataset.favShare) {
+    const f = favs[Number(b.dataset.favShare)];
+    const data = { title: tx(f, 'title'), text: tx(f, 'summary'), url: safeUrl(f.url) };
+    if (navigator.share) { try { await navigator.share(data); } catch { /* annulé */ } }
+    else { try { await navigator.clipboard.writeText(data.url); toast(t('toast_copied')); } catch { toast(data.url); } }
+    return;
+  }
+  if (b.dataset.favRemove) {
+    favs = favs.filter((_, k) => k !== Number(b.dataset.favRemove));
+    store.set('favs', favs);
+    renderFavs();
+    renderFeed();
+    toast(t('toast_fav_off'));
+  }
+});
 
 /* ---------- Mon dosage ---------- */
 function langSwitch() {
