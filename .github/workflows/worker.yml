@@ -26,15 +26,19 @@ jobs:
             echo "::error::Ajoute le secret CLOUDFLARE_API_TOKEN dans Settings › Secrets and variables › Actions."
             exit 1
           fi
+      - name: Vérifier le jeton
+        run: |
+          curl -sS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" https://api.cloudflare.com/client/v4/user/tokens/verify | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);console.log("Jeton :",j.success?j.result.status:JSON.stringify(j.errors))})'
+          curl -sS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" https://api.cloudflare.com/client/v4/accounts | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);console.log("Comptes visibles :",j.success?j.result.map(a=>a.id+" "+a.name).join(", ")||"aucun":JSON.stringify(j.errors))})'
       - name: Créer (si besoin) le stockage des notifications
         run: |
-          ID=$(npx --yes wrangler@4 kv namespace list | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s.slice(s.indexOf("[")));const n=j.find(x=>x.title==="clair-push"||x.title==="clair-profil-clair-push");console.log(n?n.id:"")})')
+          API=https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/storage/kv/namespaces
+          AUTH="Authorization: Bearer $CLOUDFLARE_API_TOKEN"
+          LIST=$(curl -sS -H "$AUTH" "$API?per_page=100")
+          ID=$(echo "$LIST" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);if(!j.success){console.error("Erreur Cloudflare (liste) :",JSON.stringify(j.errors));process.exit(1)}const n=j.result.find(x=>x.title==="clair-push");console.log(n?n.id:"")})')
           if [ -z "$ID" ]; then
-            npx --yes wrangler@4 kv namespace create clair-push --binding CLAIR > /tmp/kv.txt 2>&1 || true
-            cat /tmp/kv.txt
-            ID=$(npx --yes wrangler@4 kv namespace list | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s.slice(s.indexOf("[")));const n=j.find(x=>x.title==="clair-push"||x.title==="clair-profil-clair-push");console.log(n?n.id:"")})')
+            ID=$(curl -sS -X POST -H "$AUTH" -H "Content-Type: application/json" -d '{"title":"clair-push"}' "$API" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);if(!j.success){console.error("Erreur Cloudflare (création) :",JSON.stringify(j.errors));process.exit(1)}console.log(j.result.id)})')
           fi
-          if [ -z "$ID" ]; then echo "::error::Impossible de créer le stockage KV"; exit 1; fi
           echo "Stockage KV : $ID"
           sed -i "s/__KV_ID__/$ID/" wrangler.toml
       - name: Déployer
