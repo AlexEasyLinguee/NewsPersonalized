@@ -1,11 +1,17 @@
 name: Édition du jour
 
+# - Chaque matin (et sur « Run workflow ») : nouvelle édition triée par l'IA, publiée tout de suite,
+#   puis le journal audio (voix Kokoro, FR et EN en parallèle), publié dès qu'il est prêt.
+# - À chaque modification du code de l'app : l'app est republiée en ~1 min avec l'édition et l'audio
+#   déjà en ligne, sans tout recalculer.
+
 on:
   schedule:
     - cron: '0 5 * * *'   # tous les jours à 5 h UTC (6 h à Paris en hiver, 7 h en été)
-  workflow_dispatch:       # bouton « Run workflow » pour lancer à la main
+  workflow_dispatch:
   push:
     branches: [main]
+    paths-ignore: ['worker/**', '.github/workflows/worker.yml', 'README.md']
 
 permissions:
   contents: read
@@ -13,11 +19,37 @@ permissions:
   id-token: write
 
 concurrency:
-  group: edition
+  group: edition-${{ github.event_name == 'push' && 'app' || 'build' }}
   cancel-in-progress: false
 
+env:
+  SITE: https://alexeasylinguee.github.io/NewsPersonalized
+
 jobs:
+  # ---------- Mise à jour de l'app seule ----------
+  app:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Reprendre l'édition et l'audio déjà en ligne
+        run: node scripts/fetch-live.mjs
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs
+      - id: deployment
+        uses: actions/deploy-pages@v4
+
+  # ---------- Nouvelle édition ----------
   edition:
+    if: github.event_name != 'push'
     runs-on: ubuntu-latest
     environment:
       name: github-pages
@@ -32,6 +64,74 @@ jobs:
         run: node scripts/build.mjs
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: edition
+          path: docs/edition.json
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs
+      - id: deployment
+        uses: actions/deploy-pages@v4
+
+  audio:
+    needs: edition
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        lang: [fr, en]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: edition
+          path: docs
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Installer la voix Kokoro
+        run: |
+          pip install --quiet kokoro-onnx soundfile
+          sudo apt-get install -y -qq ffmpeg > /dev/null
+      - uses: actions/cache@v4
+        with:
+          path: kokoro
+          key: kokoro-v1.0-int8
+      - name: Télécharger le modèle (si pas en cache)
+        run: |
+          mkdir -p kokoro
+          [ -f kokoro/kokoro.onnx ] || curl -sSL -o kokoro/kokoro.onnx https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.int8.onnx
+          [ -f kokoro/voices.bin ] || curl -sSL -o kokoro/voices.bin https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin
+      - name: Enregistrer le journal audio
+        run: python3 scripts/audio.py ${{ matrix.lang }} docs/edition.json docs/audio
+        env:
+          KOKORO_DIR: kokoro
+      - uses: actions/upload-artifact@v4
+        with:
+          name: audio-${{ matrix.lang }}
+          path: docs/audio
+
+  publish-audio:
+    needs: [edition, audio]
+    if: always() && needs.edition.result == 'success'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: edition
+          path: docs
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: audio-*
+          path: docs/audio
+          merge-multiple: true
+      - run: ls docs/audio || echo "Pas d'audio aujourd'hui"
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

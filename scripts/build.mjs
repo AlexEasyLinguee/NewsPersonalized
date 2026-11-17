@@ -11,7 +11,7 @@ const SOURCES = JSON.parse(await fs.readFile(new URL('sources.json', ROOT), 'utf
 const MAX_AGE_HOURS = 30;     // on ne garde que les articles récents
 const PER_SOURCE = 15;        // max d'articles lus par source
 const MAX_ITEMS = 300;        // plafond total envoyé à l'IA (limites de l'offre gratuite)
-const BATCH = 20;             // articles par requête IA
+const BATCH = 15;             // articles par requête IA
 const PAUSE_MS = 4500;        // pause entre deux requêtes IA
 // IA : Google Gemini, offre gratuite (clé dans le secret GEMINI_API_KEY du dépôt).
 const GEMINI = 'https://generativelanguage.googleapis.com/v1beta';
@@ -136,6 +136,8 @@ Pour chaque article reçu, renvoie un objet avec :
 - "title_fr" : titre clair et factuel en français, sans sensationnalisme, 90 caractères max.
 - "summary_fr" : résumé en français en une ou deux phrases (220 caractères max), qui dit pourquoi c'est intéressant ou important. N'invente aucun fait absent de l'article.
 - "title_en" et "summary_en" : les mêmes titre et résumé, en anglais naturel.
+- "radio_fr" : la même info racontée à l'oral par un présentateur de radio chaleureux et posé, en 2 ou 3 phrases (350 caractères max), avec une courte accroche qui situe le sujet (ex. « Direction le Pacifique, avec une très bonne nouvelle pour les océans. »). Phrases simples, faciles à suivre à l'oreille : pas de parenthèses, d'abréviations, de liens ni de listes ; écris les sigles comme ils se prononcent si besoin. N'invente aucun fait.
+- "radio_en" : le même texte radio, en anglais naturel.
 Réponds uniquement en JSON : {"items": [ ... ]}.`;
 
 // Choisit automatiquement le meilleur modèle gratuit disponible (Flash-Lite, sinon Flash).
@@ -201,6 +203,8 @@ function mockScore(batch) {
     tags: b.id % 3 === 0 ? ['surf', 'océan'] : ['guitare', 'musique'],
     title_fr: b.title,
     summary_fr: b.desc.slice(0, 200),
+    radio_fr: `À la une. ${b.title}. ${b.desc.slice(0, 120)}`,
+    radio_en: `Top story. ${b.title}.`,
     title_en: `EN ${b.title}`,
     summary_en: `EN ${b.desc.slice(0, 180)}`,
   }));
@@ -229,6 +233,8 @@ function clean(r, src) {
     orig_title: src.title.slice(0, 160),
     orig_summary: cleanSummary(src.title, src.desc),
     summary_en: r.summary_en ? String(r.summary_en).slice(0, 300) : undefined,
+    radio: r.radio_fr ? String(r.radio_fr).slice(0, 450) : undefined,
+    radio_en: r.radio_en ? String(r.radio_en).slice(0, 450) : undefined,
     url: src.url,
     image: src.image,
     source: src.source,

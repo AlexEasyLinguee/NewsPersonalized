@@ -2,7 +2,8 @@
 // 1. POST /profile : transforme le texte « Parle-moi de toi » en profil structuré (via Gemini).
 //    La clé Gemini reste ici (secret GEMINI_API_KEY), jamais dans l'app. Le texte n'est pas stocké.
 // 2. /push/* : abonnements aux notifications, gardés dans le stockage KV « CLAIR ».
-// 3. /me, /friends, /share, /inbox : amis et partage d'articles (voir friends.js).
+// 3. /speak : lit un morceau de texte à voix haute (MeloTTS, Workers AI).
+// 3 bis. /me, /friends, /share, /inbox : amis et partage d'articles (voir friends.js).
 // 4. Tâche planifiée : chaque matin, une notification « Ton édition est prête » à tous les abonnés.
 // Déployé automatiquement par GitHub Actions (.github/workflows/worker.yml).
 
@@ -222,6 +223,24 @@ export default {
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors(origin) });
     const path = new URL(request.url).pathname.replace(/\/+$/, '') || '/';
     if (path.startsWith('/push/')) return handlePush(path, request, env, origin);
+    if (path === '/speak') {
+      // Lecture à voix haute d'un morceau d'article (voix MeloTTS de Cloudflare Workers AI).
+      if (!env.AI) return json({ error: 'Voix non configurée.' }, 503, origin);
+      let body = {};
+      try { body = await request.json(); } catch { /* corps invalide */ }
+      const text = String(body.text || '').replace(/\s+/g, ' ').trim().slice(0, 1200);
+      const lang = body.lang === 'en' ? 'en' : 'fr';
+      if (text.length < 2) return json({ error: 'text' }, 400, origin);
+      try {
+        const out = await env.AI.run('@cf/myshell-ai/melotts', { prompt: text, lang });
+        const b64 = typeof out === 'string' ? out : out?.audio;
+        if (!b64) return json({ error: 'voice' }, 502, origin);
+        const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+        return new Response(bytes, { headers: { 'Content-Type': 'audio/mpeg', 'Cache-Control': 'no-store', ...cors(origin) } });
+      } catch (e) {
+        return json({ error: 'voice', detail: String(e.message || e).slice(0, 200) }, 502, origin);
+      }
+    }
     if (path === '/read') {
       let body = {};
       try { body = await request.json(); } catch { /* corps invalide */ }

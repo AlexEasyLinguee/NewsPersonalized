@@ -13,3 +13,6 @@ crons = ["35 5 * * *", "35 6 * * *"]
 [[kv_namespaces]]
 binding = "CLAIR"
 id = "__KV_ID__"   # remplacé automatiquement au déploiement
+
+[ai]
+binding = "AI"   # voix de synthèse pour « écouter l'article en entier »
