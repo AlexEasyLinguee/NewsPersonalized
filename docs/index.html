@@ -173,6 +173,34 @@
   .fav-btn svg { width: 16px; height: 16px; }
   .fav-btn.icon-only { width: 44px; height: 36px; padding: 0; justify-content: center; background: var(--ground); color: var(--ink); }
   .fav-btn[data-fav-remove] { color: var(--green); }
+  /* Écouter */
+  .listen-btn { margin-top: 14px; align-self: flex-start; height: 44px; padding: 0 18px 0 14px; border-radius: 22px; border: none; background: var(--ink); color: #fff; font: inherit; font-size: 15px; font-weight: 700; display: inline-flex; align-items: center; gap: 10px; cursor: pointer; }
+  .mini-player { position: fixed; left: 10px; right: 10px; bottom: calc(var(--tabs-h) + 8px); z-index: 12; max-width: 500px; margin: 0 auto; height: 56px; border-radius: 16px; background: var(--ink); color: #fff; display: flex; align-items: center; gap: 10px; padding: 0 8px 0 16px; box-shadow: 0 6px 20px rgba(0,0,0,.25); cursor: pointer; }
+  .mini-player span { flex: 1; min-width: 0; font-size: 14px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .pl-mini-btn { width: 44px; height: 44px; border-radius: 22px; border: none; background: var(--mint); color: var(--dark); display: flex; align-items: center; justify-content: center; cursor: pointer; flex: none; }
+  .player { position: fixed; inset: 0; z-index: 36; background: var(--dark); color: #fff; overflow-y: auto; }
+  .player-body { padding: calc(10px + env(safe-area-inset-top)) 22px calc(30px + env(safe-area-inset-bottom)); display: flex; flex-direction: column; }
+  .player .link-btn { color: var(--mint); margin: 0 0 0 -12px; }
+  .player .small { color: var(--dark-muted); }
+  .pl-top { display: flex; justify-content: space-between; align-items: center; }
+  .pl-art { margin: 10px auto 18px; width: min(72vw, 300px); aspect-ratio: 1; border-radius: 24px; background: #24413A; color: var(--mint); overflow: hidden; display: flex; align-items: center; justify-content: center; }
+  .pl-art img { width: 100%; height: 100%; object-fit: cover; }
+  .pl-cat { margin: 0; font-size: 13px; font-weight: 700; color: var(--mint); }
+  .pl-title { margin: 6px 0 4px; font-family: var(--display); font-size: 23px; line-height: 1.2; }
+  .pl-bar { margin-top: 16px; height: 4px; border-radius: 2px; background: #2A3F39; overflow: hidden; }
+  .pl-bar i { display: block; height: 100%; width: 0; background: var(--mint); }
+  .pl-time { margin: 6px 0 0; font-variant-numeric: tabular-nums; }
+  .pl-controls { margin-top: 14px; display: flex; justify-content: center; align-items: center; gap: 12px; }
+  .pl-controls .round { background: var(--dark-2); color: #fff; font-size: 13px; }
+  .pl-play { width: 72px; height: 72px; border-radius: 36px; border: none; background: var(--mint); color: var(--dark); display: flex; align-items: center; justify-content: center; cursor: pointer; }
+  .pl-play svg { width: 30px; height: 30px; }
+  .player .toggle { background: var(--dark-2); color: #C9D6D0; border-color: #2A3F39; }
+  .player .toggle[aria-pressed="true"] { background: var(--mint); color: var(--dark); border-color: var(--mint); }
+  .pl-queue { list-style: none; margin: 22px 0 6px; padding: 0; border-top: 1px solid #1F3530; }
+  .pl-queue li button { width: 100%; min-height: 48px; border: none; border-bottom: 1px solid #1F3530; background: none; color: #C9D6D0; font: inherit; font-size: 14px; text-align: left; display: flex; gap: 10px; align-items: center; padding: 8px 0; cursor: pointer; }
+  .pl-queue li button span { width: 18px; flex: none; color: var(--mint); font-weight: 800; }
+  .pl-queue li.now button { color: #fff; font-weight: 700; }
+  .pl-queue li.done button { color: var(--dark-muted); }
   .reader { position: fixed; inset: 0; z-index: 35; background: var(--ground); color: var(--ink); overflow-y: auto; -webkit-overflow-scrolling: touch; }
   .reader-body { padding: calc(14px + env(safe-area-inset-top)) 22px calc(40px + env(safe-area-inset-bottom)); }
   .reader-body h1 { font-size: 28px; line-height: 1.15; }
@@ -196,6 +224,7 @@
         <p class="date" id="ess-date"></p>
         <h1 data-i18n="ess_title">L'essentiel</h1>
         <p class="sub" id="ess-sub"></p>
+        <button type="button" class="listen-btn hidden" id="listen-btn"></button>
       </header>
       <div id="ess-stale"></div>
       <div id="ess-later"></div>
@@ -233,6 +262,12 @@
     </div>
   </section>
 </main>
+
+<div id="mini-player" class="mini-player hidden" role="region" aria-label="Lecteur">
+  <span id="mini-title"></span>
+  <button type="button" id="mini-toggle" class="pl-mini-btn"></button>
+</div>
+<section id="player" class="player hidden" role="dialog" aria-modal="true" aria-label="Écouter"><div class="wrap player-body" id="player-body"></div></section>
 
 <nav class="tabs" aria-label="Navigation">
   <button type="button" data-tab="essentiel" aria-current="page">

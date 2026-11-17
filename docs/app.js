@@ -1,6 +1,7 @@
 import { THEMES, LEVELS, CATEGORY_LABELS, DEFAULT_SETTINGS, select, followedReason, themeOf } from './select.js';
 import { WORKER_URL } from './config.js';
 import { makeT } from './i18n.js';
+import { initPlayer } from './player.js';
 
 const TOPIC_IDS = ['monde', 'aviation', 'economie', 'tech', 'ecologie', 'sante', 'espace', 'ia'];
 
@@ -13,6 +14,12 @@ const ICONS = {
   bell: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#0B6E53" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z"/><path d="M10 21h4"/></svg>',
   flame: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#B45309" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21c-3.9 0-6.5-2.6-6.5-6.2 0-3.4 2.4-5.4 3.6-8.3.4 1.9 1.4 3 2.6 3.6C11.6 7 13 4.5 15 3c-.3 2.8 3.5 5.5 3.5 10.8 0 4.4-2.8 7.2-6.5 7.2z"/></svg>',
   send: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 3 10 14M21 3l-7 18-4-7-7-4z"/></svg>',
+  play: '<svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5.5v13l11-6.5z"/></svg>',
+  pause: '<svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6.5" y="5" width="4" height="14" rx="1"/><rect x="13.5" y="5" width="4" height="14" rx="1"/></svg>',
+  next: '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M5 5.5v13L15 12zM16 5h3v14h-3z"/></svg>',
+  prev: '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M19 5.5v13L9 12zM5 5h3v14H5z"/></svg>',
+  headphones: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 15v-3a8 8 0 0 1 16 0v3"/><rect x="3" y="14" width="4.5" height="6.5" rx="1.5"/><rect x="16.5" y="14" width="4.5" height="6.5" rx="1.5"/></svg>',
+  wave: '<svg width="72" height="72" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M3 12h1M6.5 8v8M10 5v14M13.5 9v6M17 6.5v11M20.5 10.5v3"/></svg>',
   arrow: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>',
 };
 
@@ -309,6 +316,16 @@ function renderEssentiel() {
     : ageH > 30 ? `<div class="stale">${esc(t('stale'))}</div>` : '';
   $('#ess-list').innerHTML = sel.essentiel.map(essCard).join('') || `<div class="empty">${esc(t('ess_empty'))}</div>`;
   $('#go-fil').innerHTML = `${esc(t('go_fil', sel.fil.length))} ${ICONS.arrow}`;
+  renderListenButton();
+}
+function renderListenButton() {
+  const b = $('#listen-btn');
+  if (!b || !edition) return;
+  b.classList.remove('hidden');
+  b.innerHTML = `${ICONS.headphones}<span>${esc(t('listen_btn'))}</span>`;
+  player.summary().then(({ ready, minutes }) => {
+    b.innerHTML = `${ICONS.headphones}<span>${esc(ready ? t('listen_btn_min', minutes) : t('listen_btn'))}</span>`;
+  }).catch(() => {});
 }
 
 /* ---------- Le fil ---------- */
@@ -552,6 +569,7 @@ function renderSettings() {
 }
 function setLanguage(lang) {
   settings.lang = lang;
+  player.reset();
   applyLanguage();
   saveSettings();
   syncPushLang();
@@ -1080,6 +1098,28 @@ document.addEventListener('click', (e) => {
 window.addEventListener('online', () => { renderEssentiel(); refreshInbox(); });
 window.addEventListener('offline', renderEssentiel);
 
+/* ---------- Écouter (journal audio) ---------- */
+async function getArticle(item) {
+  const read = async () => {
+    try { const hit = await (await caches.open(ART_CACHE)).match(artKey(item.url)); return hit ? hit.json() : null; } catch { return null; }
+  };
+  return (await read()) || (navigator.onLine && (await saveArticle(item)) ? read() : null);
+}
+const player = initPlayer({
+  $, esc, t: (...a) => t(...a), tx, catLabel, safeUrl, toast, ICONS,
+  relay: PUSH_BASE,
+  settings: () => settings,
+  selection: () => sel,
+  getArticle,
+  markRead: (item) => {
+    if (item.shareId) markShareSeen(item.shareId);
+    if (markRead(item)) { const k = sel.fil.indexOf(item); const seg = $('#progress').children[k]; if (seg) seg.classList.add('read'); }
+  },
+  toggleFull: () => { settings.audioFull = settings.audioFull === false; store.set('settings', settings); },
+  onFinished: () => { haptic(2); },
+});
+$('#listen-btn').addEventListener('click', () => { if (player.isActive()) player.toggle(); else player.start(); });
+
 /* ---------- Démarrage ---------- */
 async function load() {
   try {
@@ -1091,6 +1131,7 @@ async function load() {
     renderFeed();
     setTimeout(() => precacheEdition(false), 1500); // garde les photos du jour pour le hors-ligne
     setTimeout(pruneArticles, 2000);
+    setTimeout(() => player.precache(), 4000); // résumés audio du jour, pour l'écoute hors ligne
     setTimeout(() => { if (navigator.onLine) favs.slice(0, 30).reduce((p, f) => p.then(() => saveArticle(f)), Promise.resolve()); }, 3000);
   } catch {
     $('#ess-sub').textContent = t('no_edition');

@@ -2,9 +2,9 @@
 // - L'app et l'édition : réseau d'abord (toujours la dernière version), copie de secours pour le hors-ligne.
 // - Les photos : gardées en cache pour être visibles sans réseau.
 
-const SHELL = 'clair-shell-v2';
+const SHELL = 'clair-shell-v3';
 const IMG = 'clair-img-v1';
-const SHELL_FILES = ['./', 'index.html', 'app.js', 'select.js', 'i18n.js', 'config.js', 'manifest.webmanifest', 'icon-180.png'];
+const SHELL_FILES = ['./', 'index.html', 'app.js', 'player.js', 'select.js', 'i18n.js', 'config.js', 'manifest.webmanifest', 'icon-180.png', 'icon-512.png'];
 const MAX_IMAGES = 250;
 
 self.addEventListener('install', (event) => {
@@ -52,6 +52,7 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(req.url);
   const scope = new URL(self.registration.scope);
 
+  if (url.origin === scope.origin && url.pathname.startsWith(`${scope.pathname}audio/`)) return; // géré par le lecteur
   if (url.origin === scope.origin && url.pathname.startsWith(scope.pathname)) {
     if (url.pathname.endsWith('/edition.json')) {
       event.respondWith(networkFirst(req, new URL('edition.json', scope).href, 8000));

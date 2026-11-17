@@ -63,3 +63,10 @@ Onglet **Amis** : chacun choisit un prénom et reçoit un code ami (ex. `K7P-3MX
 ### Articles complets hors ligne
 
 Bouton « Télécharger les articles pour lire hors ligne » (Mon dosage › Hors ligne), et automatiquement pour les favoris : l'app demande au relais (`worker/reader.js`, route `/read`) le texte de chaque article, et le garde sur le téléphone (Cache API). Le relais n'accepte que les sites présents dans l'édition du jour et ne stocke rien. Hors ligne, toucher un article ouvre le lecteur intégré. Usage personnel : une version commerciale demanderait des accords avec les médias.
+
+### Écouter (journal audio)
+
+- Chaque matin, après l'édition, `scripts/audio.py` enregistre la version « radio » de chaque article (champ `radio`/`radio_en` écrit par l'IA) avec la voix open source Kokoro (FR : ff_siwis, EN : bf_emma), dans `docs/audio/<langue>/`, avec un sommaire `docs/audio/<langue>.json`. FR et EN tournent en parallèle dans GitHub Actions.
+- Dans l'app (`docs/player.js`) : bouton « Écouter mon édition », playlist construite selon le profil (intro, l'essentiel, transition, le fil, conclusion), lecture écran verrouillé, commandes sur l'écran de verrouillage, vitesse.
+- « Article complet » (en ligne) : après l'annonce, le texte complet (récupéré via `/read`) est lu par la voix MeloTTS de Cloudflare Workers AI (route `/speak` du relais), morceau par morceau. Hors ligne : résumés seulement (gardés sur le téléphone).
+- Une modification du code de l'app republie le site en ~1 min en reprenant l'édition et l'audio déjà en ligne (`scripts/fetch-live.mjs`).

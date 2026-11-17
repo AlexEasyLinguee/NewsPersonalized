@@ -59,6 +59,7 @@ export const DEFAULT_SETTINGS = {
   lang: 'fr',
   articleLang: 'translated', // 'translated' = dans la langue de l'app, 'original' = version d'origine
   sound: true,
+  audioFull: true,  // écouter l'article complet quand on a du réseau
   haptics: true,
 };
 
