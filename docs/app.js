@@ -460,7 +460,9 @@ $('#fav-list').addEventListener('click', async (e) => {
     return;
   }
   if (b.dataset.favRemove) {
+    const removed = favs[Number(b.dataset.favRemove)];
     favs = favs.filter((_, k) => k !== Number(b.dataset.favRemove));
+    if (removed && !currentItems().some((i) => i.url === removed.url)) deleteArticles([removed.url]);
     store.set('favs', favs);
     renderFavs();
     renderFeed();
@@ -560,6 +562,10 @@ $('#settings').addEventListener('click', (e) => {
   if (b.hasAttribute('data-edit-profile')) return show('profil');
   if (b.hasAttribute('data-push')) return togglePush(b, renderSettings);
   if (b.hasAttribute('data-offline')) return downloadAll(b);
+  if (b.hasAttribute('data-offline-clear')) {
+    if (!confirm(t('offline_clear_confirm'))) return;
+    return deleteArticles([...artIndex]).then(() => { toast(t('offline_cleared')); renderSettings(); renderEssentiel(); renderFeed(); });
+  }
   if (b.dataset.lang) setLanguage(b.dataset.lang);
   else if (b.dataset.artlang) settings.articleLang = b.dataset.artlang;
   else if (b.dataset.fx) {
@@ -909,6 +915,7 @@ function offlineSection() {
       <p class="hint">${esc(ready ? t('offline_ready', sel.essentiel.length + sel.fil.length) : t('offline_hint'))}</p>
       <p class="hint">${esc(t('offline_articles', n, all.length))}</p>
       <button type="button" class="${n < all.length ? 'cta' : 'outline-btn'}" data-offline style="width:100%;margin:0">${esc(t('offline_btn'))}</button>
+      ${artIndex.length ? `<button type="button" class="link-btn" data-offline-clear style="margin:6px 0 0">${esc(t('offline_clear', artIndex.length))}</button>` : ''}
       <p class="small" style="margin-top:10px;line-height:1.5">${esc(t('offline_tip'))}</p>
     </section>`;
 }
@@ -944,6 +951,22 @@ async function saveArticle(item) {
     store.set('artIndex', artIndex);
     return true;
   } catch { return false; }
+}
+async function deleteArticles(urls) {
+  if (!urls.length) return;
+  try {
+    const cache = await caches.open(ART_CACHE);
+    for (const u of urls) await cache.delete(artKey(u));
+  } catch { /* stockage indisponible */ }
+  const gone = new Set(urls);
+  artIndex = artIndex.filter((u) => !gone.has(u));
+  store.set('artIndex', artIndex);
+}
+// Ménage automatique : les articles d'anciennes éditions qui ne sont pas en favoris sont effacés.
+function pruneArticles() {
+  if (!edition) return;
+  const keep = new Set(currentItems().map((i) => i.url));
+  deleteArticles(artIndex.filter((u) => !keep.has(u)));
 }
 // Télécharge le texte complet de toute l'édition et des favoris (3 à la fois).
 async function downloadArticles(onProgress) {
@@ -986,7 +1009,8 @@ async function openReader(url) {
     <h1>${esc(data.title || tx(item, 'title') || '')}</h1>
     ${data.partial ? `<p class="stale" style="margin:14px 0 0">${esc(t('reader_partial'))}</p>` : ''}
     <div class="reader-text">${data.blocks.map((b) => (b.t === 'h' ? `<h2>${esc(b.text)}</h2>` : `<p>${esc(b.text)}</p>`)).join('')}</div>
-    <a class="outline-btn reader-orig" href="${esc(safeUrl(item.url))}" target="_blank" rel="noopener">${esc(t('reader_original', source))}</a>`;
+    <a class="outline-btn reader-orig" href="${esc(safeUrl(item.url))}" target="_blank" rel="noopener">${esc(t('reader_original', source))}</a>
+    <button type="button" class="link-btn" data-reader-delete="${esc(item.url)}" style="margin-top:10px">${esc(t('reader_delete'))}</button>`;
   const r = $('#reader');
   r.classList.remove('hidden');
   r.scrollTop = 0;
@@ -994,6 +1018,15 @@ async function openReader(url) {
 }
 $('#reader').addEventListener('click', (e) => {
   if (e.target.closest('[data-reader-close]')) $('#reader').classList.add('hidden');
+  const del = e.target.closest('[data-reader-delete]');
+  if (del) {
+    deleteArticles([del.dataset.readerDelete]).then(() => {
+      $('#reader').classList.add('hidden');
+      toast(t('reader_deleted'));
+      renderEssentiel(); renderFeed();
+      if ($('#favoris').classList.contains('active')) renderFavs();
+    });
+  }
 });
 document.addEventListener('click', (e) => {
   const el = e.target.closest('[data-reader]');
@@ -1057,6 +1090,7 @@ async function load() {
     renderEssentiel();
     renderFeed();
     setTimeout(() => precacheEdition(false), 1500); // garde les photos du jour pour le hors-ligne
+    setTimeout(pruneArticles, 2000);
     setTimeout(() => { if (navigator.onLine) favs.slice(0, 30).reduce((p, f) => p.then(() => saveArticle(f)), Promise.resolve()); }, 3000);
   } catch {
     $('#ess-sub').textContent = t('no_edition');
