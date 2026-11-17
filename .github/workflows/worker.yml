@@ -26,6 +26,13 @@ jobs:
             echo "::error::Ajoute le secret CLOUDFLARE_API_TOKEN dans Settings › Secrets and variables › Actions."
             exit 1
           fi
+      - name: Nettoyer le jeton (espaces, retours à la ligne, « Bearer »)
+        run: |
+          T=$(printf '%s' "$CLOUDFLARE_API_TOKEN" | tr -d '[:space:]' | sed -E 's/^[Bb]earer//')
+          echo "::add-mask::$T"
+          echo "Longueur du jeton : ${#T} caractères (attendu : 40 à 53)"
+          case "$T" in *[!A-Za-z0-9_-]*) echo "::warning::Le jeton contient des caractères inattendus : vérifie ce que tu as collé dans le secret.";; esac
+          echo "CLOUDFLARE_API_TOKEN=$T" >> "$GITHUB_ENV"
       - name: Vérifier le jeton
         run: |
           curl -sS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" https://api.cloudflare.com/client/v4/user/tokens/verify | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);console.log("Jeton :",j.success?j.result.status:JSON.stringify(j.errors))})'
