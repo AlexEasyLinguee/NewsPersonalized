@@ -61,6 +61,8 @@ export const DEFAULT_SETTINGS = {
   sound: true,
   audioFull: true,  // écouter l'article complet quand on a du réseau
   haptics: true,
+  eveningOn: false, // rappel du soir : désactivé par défaut
+  eveningHour: 20,
 };
 
 // Catégories qui méritent leur place dans le fil même quand le ton est neutre
@@ -134,8 +136,13 @@ export function followedReason(item, s) {
   return null;
 }
 
+// Sujets prioritaires : ceux marqués d'une étoile parmi « Ce que tu aimes » et « À savoir même si c'est grave ».
+export const priorityGroups = (s) => [...(s.interests || []), ...(s.keep_informed || [])].filter((g) => g.priority);
+export const MAX_PRIORITY = 5;
+
 export function select(edition, s) {
   const avoided = (i) => i.importance < 9 && matchGroups(i, s.avoid).length > 0;
+  const prios = priorityGroups(s);
   const items = dedupe((edition.items || []).filter((i) => !i.fait_divers && !avoided(i)));
   const threshold = s.level === 'full' ? 6 : 8;
 
@@ -151,6 +158,17 @@ export function select(edition, s) {
   const used = new Set(essentiel.map((i) => i.id));
 
   // 2. Le fil : bonnes nouvelles et infos neutres utiles, dans tes thèmes ou tes centres d'intérêt.
+  // 2 bis. Sujets prioritaires : toujours en tête du fil, même quand la nouvelle est neutre ou mauvaise.
+  const top = [];
+  for (const i of items) {
+    if (used.has(i.id) || i.importance < 2) continue;
+    const p = matchGroups(i, prios)[0];
+    if (p) top.push({ ...i, why: p.label, prio: true, score: i.importance });
+  }
+  top.sort((a, b) => b.score - a.score);
+  const prioFil = top.slice(0, MAX_PRIORITY + 3);
+  prioFil.forEach((i) => used.add(i.id));
+
   const pool = [];
   for (const i of items) {
     if (used.has(i.id) || i.tone === 'negative') continue;
@@ -173,7 +191,7 @@ export function select(edition, s) {
     if (!groups.has(i.group)) groups.set(i.group, []);
     groups.get(i.group).push(i);
   }
-  const fil = [];
+  const fil = [...prioFil];
   while (fil.length < s.count && [...groups.values()].some((g) => g.length)) {
     for (const g of groups.values()) {
       if (g.length && fil.length < s.count) fil.push(g.shift());

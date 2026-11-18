@@ -1,4 +1,4 @@
-import { THEMES, LEVELS, CATEGORY_LABELS, DEFAULT_SETTINGS, select, followedReason, themeOf } from './select.js';
+import { THEMES, LEVELS, CATEGORY_LABELS, DEFAULT_SETTINGS, select, followedReason, themeOf, priorityGroups, MAX_PRIORITY } from './select.js';
 import { WORKER_URL } from './config.js';
 import { makeT } from './i18n.js';
 import { initPlayer } from './player.js';
@@ -100,6 +100,7 @@ function markShareSeen(id) {
 }
 function saveSettings() {
   store.set('settings', settings);
+  syncPushLang(false);
   computeSel();
   renderEssentiel();
   renderFeed();
@@ -122,12 +123,82 @@ function markRead(item) {
   store.set('readLog', readLog);
   return true;
 }
+// Une journée compte quand l'édition est terminée (arrivée au bout du fil).
+// Les jours lus avant cette règle comptent aussi, pour ne casser la série de personne.
+let doneDays = store.get('doneDays', null);
+if (!Array.isArray(doneDays)) {
+  doneDays = Object.keys(readLog).filter((k) => k < dayKey() && (readLog[k] || []).length);
+  store.set('doneDays', doneDays);
+}
+const isDone = (k) => doneDays.includes(k);
+const dayDoneToday = () => isDone(dayKey());
+// Série en jours, avec un jour de pause gratuit par semaine : un seul jour manqué
+// (entouré de jours lus) ne casse pas la série, au plus une fois tous les 7 jours.
 function streak() {
   const d = new Date();
-  if (!(readLog[dayKey(d)] || []).length) d.setDate(d.getDate() - 1); // la journée n'est pas finie
+  if (!isDone(dayKey(d))) d.setDate(d.getDate() - 1); // la journée n'est pas finie
   let n = 0;
-  while ((readLog[dayKey(d)] || []).length) { n++; d.setDate(d.getDate() - 1); }
+  let sinceGrace = 99;
+  for (let guard = 0; guard < 1000; guard++) {
+    if (isDone(dayKey(d))) { n++; sinceGrace++; }
+    else {
+      const prev = new Date(d);
+      prev.setDate(prev.getDate() - 1);
+      if (sinceGrace >= 6 && isDone(dayKey(prev))) sinceGrace = 0; // jour de pause
+      else break;
+    }
+    d.setDate(d.getDate() - 1);
+  }
   return n;
+}
+const MILESTONES = [3, 7, 14, 30, 50, 100, 150, 200, 250, 300, 365];
+const isMilestone = (n) => MILESTONES.includes(n) || (n > 365 && n % 100 === 0);
+function onDayDone() {
+  if (!sel.fil.length || dayDoneToday()) return;
+  doneDays = [...doneDays, dayKey()].sort().slice(-500);
+  store.set('doneDays', doneDays);
+  const n = streak();
+  syncProgress({ done: dayKey(), streak: n });
+  if (isMilestone(n)) setTimeout(() => celebrate(n), 1500);
+}
+// Petite fête aux paliers : soleil qui se lève, chiffre qui monte, confettis. Un toucher la ferme.
+function celebrate(n) {
+  if (document.querySelector('.milestone')) return;
+  const el = document.createElement('div');
+  el.className = 'milestone';
+  el.setAttribute('role', 'dialog');
+  el.setAttribute('aria-label', t('ms_title', n));
+  const rays = Array.from({ length: 12 }, (_, k) => `<line x1="60" y1="14" x2="60" y2="4" transform="rotate(${k * 30} 60 60)"/>`).join('');
+  const bits = Array.from({ length: 18 }, (_, k) => {
+    const a = (k / 18) * Math.PI * 2;
+    const r = 120 + (k % 3) * 40;
+    return `<i style="--x:${Math.round(Math.cos(a) * r)}px;--y:${Math.round(Math.sin(a) * r)}px;--d:${(k % 5) * 40}ms"></i>`;
+  }).join('');
+  el.innerHTML = `<div class="ms-inner">
+      <div class="ms-burst" aria-hidden="true">${bits}</div>
+      <svg class="ms-sun" width="150" height="150" viewBox="0 0 120 120" aria-hidden="true">
+        <g class="ms-rays" stroke="#F5B83D" stroke-width="5" stroke-linecap="round">${rays}</g>
+        <circle cx="60" cy="60" r="34" fill="#F5B83D"/>
+      </svg>
+      <div class="ms-num" aria-hidden="true">0</div>
+      <h2>${esc(t('ms_title', n))}</h2>
+      <p>${esc(t('ms_sub', n))}</p>
+      <button type="button" class="cta">${esc(t('ms_ok'))}</button>
+    </div>`;
+  document.body.appendChild(el);
+  const close = () => { el.classList.add('out'); setTimeout(() => el.remove(), 300); };
+  el.addEventListener('click', close);
+  setTimeout(close, 5000);
+  const num = el.querySelector('.ms-num');
+  const t0 = performance.now();
+  const step = (now) => {
+    const k = Math.min(1, (now - t0 - 350) / 700);
+    num.textContent = String(Math.max(0, Math.round(n * (1 - (1 - k) ** 3))));
+    if (k < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+  haptic(3);
+  fanfare();
 }
 const readToday = () => sel.fil.filter((i) => (readLog[dayKey()] || []).includes(i.url)).length;
 
@@ -146,12 +217,13 @@ const hapticSwitch = (() => {
 })();
 function haptic(times = 1) {
   if (!settings.haptics) return;
-  if (navigator.vibrate) { navigator.vibrate(times > 1 ? [20, 60, 20, 60, 40] : 25); return; }
+  if (navigator.vibrate) { navigator.vibrate(times > 2 ? [30, 70, 30, 70, 30, 120, 90] : times > 1 ? [20, 60, 20, 60, 40] : 25); return; }
   try { hapticSwitch.click(); } catch { /* non pris en charge */ }
-  if (times > 1) setTimeout(() => { try { hapticSwitch.click(); } catch { /* */ } }, 140);
+  for (let k = 1; k < times; k++) setTimeout(() => { try { hapticSwitch.click(); } catch { /* */ } }, 140 * k);
 }
 let audio = null;
-function ding(big = false) {
+function fanfare() { ding(false, [523, 659, 784, 1047, 1319, 1568]); }
+function ding(big = false, custom = null) {
   if (!settings.sound) return;
   try {
     if (!audio) {
@@ -160,7 +232,7 @@ function ding(big = false) {
       audio = new (window.AudioContext || window.webkitAudioContext)();
     }
     audio.resume();
-    const notes = big ? [659, 880, 1175, 1568] : [880, 1319];
+    const notes = custom || (big ? [659, 880, 1175, 1568] : [880, 1319]);
     notes.forEach((f, k) => {
       const o = audio.createOscillator();
       const g = audio.createGain();
@@ -194,6 +266,7 @@ function reward(idx, withFeedback) {
   const done = sel.fil.length > 0 && sel.fil.every((_, k) => rewarded.has(k) || (readLog[dayKey()] || []).includes(sel.fil[k].url));
   const big = done && idx === sel.fil.length - 1;
   popCheck(big);
+  if (done) onDayDone();
   if (withFeedback) { haptic(big ? 2 : 1); ding(big); }
   else if (audio) ding(big);
   const seg = $('#progress').children[idx];
@@ -225,7 +298,7 @@ async function enablePush() {
   const res = await fetch(`${PUSH_BASE}/push/subscribe`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ subscription: sub.toJSON(), lang: settings.lang, test: true, token: me?.token }),
+    body: JSON.stringify({ subscription: sub.toJSON(), lang: settings.lang, test: true, token: me?.token, ...pushPrefs() }),
   });
   if (!res.ok) throw new Error(t('push_error'));
   store.set('push', true);
@@ -239,11 +312,36 @@ async function disablePush() {
   }
   store.set('push', false);
 }
-async function syncPushLang() {
-  if (pushState() !== 'on') return;
+// Réglages du rappel du soir envoyés au serveur. Les sujets prioritaires n'y sont gardés
+// que si le rappel est activé (sans nom, liés à l'abonnement aux notifications).
+function pushPrefs() {
+  const on = !!settings.eveningOn;
+  return {
+    evening: { on, hour: settings.eveningHour || 20 },
+    tz: -new Date().getTimezoneOffset(),
+    priorities: on ? priorityGroups(settings).map((g) => ({ label: g.label, keywords: (g.keywords || []).slice(0, 12) })) : [],
+  };
+}
+async function pushSub() {
+  if (pushState() !== 'on') return null;
   const reg = await navigator.serviceWorker.getRegistration();
-  const sub = reg && (await reg.pushManager.getSubscription());
-  if (sub) fetch(`${PUSH_BASE}/push/subscribe`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ subscription: sub.toJSON(), lang: settings.lang, token: me?.token }) }).catch(() => {});
+  return reg && (await reg.pushManager.getSubscription());
+}
+async function syncPushLang(force = true) {
+  const sub = await pushSub().catch(() => null);
+  if (!sub) return;
+  const body = { subscription: sub.toJSON(), lang: settings.lang, token: me?.token, ...pushPrefs() };
+  const sig = JSON.stringify([body.lang, body.token, body.evening, body.tz, body.priorities]);
+  if (!force && store.get('pushSig', '') === sig) return; // rien n'a changé : pas d'appel
+  const res = await fetch(`${PUSH_BASE}/push/subscribe`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).catch(() => null);
+  if (res?.ok) store.set('pushSig', sig);
+}
+// Dit au serveur que l'édition du jour est finie (pas de rappel ce soir), ou que l'app a été ouverte.
+async function syncProgress(extra) {
+  if (!settings.eveningOn) return;
+  const sub = await pushSub().catch(() => null);
+  if (!sub) return;
+  fetch(`${PUSH_BASE}/push/progress`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ endpoint: sub.endpoint, seen: dayKey(), ...extra }) }).catch(() => {});
 }
 async function togglePush(btn, after) {
   btn.disabled = true;
@@ -262,6 +360,16 @@ function pushSection() {
       <h2>${esc(t('push_title'))}</h2>
       <p class="hint">${esc(t(`push_${st}`))}</p>
       ${btn ? `<button type="button" class="${st === 'on' ? 'outline-btn' : 'cta'}" data-push style="width:100%;margin:0">${esc(btn)}</button>` : ''}
+      ${st === 'on' ? `<div class="evening">
+        <div class="count-row" style="padding:0;border:0">
+          <div><div style="font-weight:700">${esc(t('eve_title'))}</div><div class="small">${esc(t('eve_sub'))}</div></div>
+          <button type="button" class="toggle" data-evening aria-pressed="${!!settings.eveningOn}">${esc(settings.eveningOn ? t('eve_on') : t('eve_off'))}</button>
+        </div>
+        ${settings.eveningOn ? `<div class="seg five" role="group" aria-label="${esc(t('eve_hour'))}">
+          ${[18, 19, 20, 21, 22].map((h) => `<button type="button" data-eve-hour="${h}" aria-pressed="${(settings.eveningHour || 20) === h}">${h} h</button>`).join('')}
+        </div>
+        <p class="desc">${esc(t('eve_desc'))}</p>` : ''}
+      </div>` : ''}
     </section>`;
 }
 
@@ -342,6 +450,7 @@ function slide(item, i) {
     <div class="media">${img}</div>
     <div class="slide-body">
       ${item.shared ? `<span class="why">${esc(t('shared_by', item.shared.from))}</span>${item.shared.note ? `<p class="shared-note">« ${esc(item.shared.note)} »</p>` : ''}`
+        : item.prio ? `<span class="why prio">${esc(t('why_prio', item.why))}</span>`
         : item.why ? `<span class="why">${esc(t('why', item.why))}</span>` : ''}
       <h2>${esc(tx(item, 'title'))}</h2>
       <p>${esc(tx(item, 'summary'))}</p>
@@ -366,7 +475,7 @@ function endSlide() {
       <div class="stat"><b style="color:var(--green)">${sel.fil.length}</b><span>${esc(t('st_fil'))}</span></div>
       <div class="stat"><b id="read-count">${readToday()}</b><span>${esc(t('st_read'))}</span></div>
     </div>
-    ${n ? `<div class="note streak">${ICONS.flame}<span id="streak-text">${esc(t('streak', n))}</span></div>` : ''}
+    ${n ? `<div class="note streak">${ICONS.flame}<span id="streak-text">${esc(t('streak', n))}<br><small>${esc(t('streak_pause'))}</small></span></div>` : ''}
     <div class="note">${ICONS.bell}<span>${t('next_ed')}</span></div>
     ${pushState() === 'available' ? `<button type="button" class="cta" data-act="push" style="margin:0;width:100%">${esc(t('push_cta'))}</button>` : ''}
     <button type="button" class="outline-btn" data-act="favs">${esc(t('see_favs', favs.length))}</button>
@@ -400,7 +509,7 @@ function updateProgress() {
     if (idx === curIdx + 1 && Date.now() - enteredAt >= 1500) reward(curIdx, false);
     curIdx = idx;
     enteredAt = Date.now();
-    if (idx >= total) refreshEndStats();
+    if (idx >= total && total > 0) { onDayDone(); refreshEndStats(); }
   }
   const atEnd = idx >= total;
   $('.feed-head').classList.toggle('hidden', atEnd || total === 0);
@@ -501,7 +610,7 @@ function groupTags(key, title) {
   const groups = settings[key] || [];
   if (!groups.length) return '';
   return `<p class="small" style="margin:8px 0 6px;font-weight:700">${esc(title)}</p>
-    <div class="tags">${groups.map((g, k) => `<span class="tag">${esc(g.label)}<button type="button" data-rm-group="${key}:${k}" aria-label="${esc(t('remove', g.label))}">×</button></span>`).join('')}</div>`;
+    <div class="tags">${groups.map((g, k) => `<span class="tag${g.priority ? ' prio' : ''}">${key !== 'avoid' ? `<button type="button" class="star" data-prio="${key}:${k}" aria-pressed="${!!g.priority}" aria-label="${esc(t('prio_aria', g.label))}">${g.priority ? '★' : '☆'}</button>` : ''}${esc(g.label)}<button type="button" data-rm-group="${key}:${k}" aria-label="${esc(t('remove', g.label))}">×</button></span>`).join('')}</div>`;
 }
 let topicKind = 'keep_informed';
 async function addTopic(text) {
@@ -513,7 +622,12 @@ async function addTopic(text) {
       if (res.ok && data.group) group = data.group;
     } catch { /* hors ligne : on garde le texte comme mot-clé */ }
   }
-  settings[topicKind] = [...(settings[topicKind] || []).filter((g) => g.label !== group.label), group];
+  const key = topicKind === 'priority' ? 'interests' : topicKind;
+  if (topicKind === 'priority') {
+    if (priorityGroups(settings).length >= MAX_PRIORITY) toast(t('prio_max', MAX_PRIORITY));
+    else group = { ...group, priority: true };
+  }
+  settings[key] = [...(settings[key] || []).filter((g) => g.label !== group.label), group];
   saveSettings();
   return group;
 }
@@ -534,13 +648,15 @@ function renderSettings() {
     <section class="profile-box">
       <h2>${esc(t('profile'))}</h2>
       <p class="desc" style="margin:0 0 12px">${esc(settings.resume || t('no_profile'))}</p>
+      ${(settings.interests || []).length || (settings.keep_informed || []).length ? `<p class="hint" style="margin:0 0 4px">${esc(t('prio_hint'))}</p>` : ''}
       ${groupTags('interests', t('g_interests'))}
       ${groupTags('keep_informed', t('g_keep'))}
       ${groupTags('avoid', t('g_avoid'))}
       <form id="topic-form" class="topic-form">
         <label class="small" for="topic-input" style="font-weight:700">${esc(t('topic_add_title'))}</label>
         <input id="topic-input" maxlength="200" placeholder="${esc(t('topic_add_ph'))}" autocomplete="off">
-        <div class="seg" role="group" aria-label="${esc(t('topic_add_title'))}">
+        <div class="seg four" role="group" aria-label="${esc(t('topic_add_title'))}">
+          <button type="button" data-topic-kind="priority" aria-pressed="${topicKind === 'priority'}">${esc(t('topic_kind_prio'))}</button>
           <button type="button" data-topic-kind="interests" aria-pressed="${topicKind === 'interests'}">${esc(t('topic_kind_love'))}</button>
           <button type="button" data-topic-kind="keep_informed" aria-pressed="${topicKind === 'keep_informed'}">${esc(t('topic_kind_keep'))}</button>
           <button type="button" data-topic-kind="avoid" aria-pressed="${topicKind === 'avoid'}">${esc(t('topic_kind_avoid'))}</button>
@@ -607,6 +723,23 @@ $('#settings').addEventListener('click', (e) => {
   if (b.hasAttribute('data-edit-profile')) return show('profil');
   if (b.dataset.topicKind) { topicKind = b.dataset.topicKind; document.querySelectorAll('[data-topic-kind]').forEach((x) => x.setAttribute('aria-pressed', String(x === b))); return; }
   if (b.hasAttribute('data-push')) return togglePush(b, renderSettings);
+  if (b.hasAttribute('data-evening')) {
+    settings.eveningOn = !settings.eveningOn;
+    if (settings.eveningOn && !priorityGroups(settings).length) toast(t('eve_no_prio'));
+    saveSettings();
+    if (settings.eveningOn && dayDoneToday()) syncProgress({ done: dayKey(), streak: streak() });
+    return renderSettings();
+  }
+  if (b.dataset.eveHour) { settings.eveningHour = Number(b.dataset.eveHour); saveSettings(); return renderSettings(); }
+  if (b.dataset.prio) {
+    const [key, k] = b.dataset.prio.split(':');
+    const g = settings[key][Number(k)];
+    if (!g.priority && priorityGroups(settings).length >= MAX_PRIORITY) return toast(t('prio_max', MAX_PRIORITY));
+    settings[key] = settings[key].map((x, idx) => (idx === Number(k) ? { ...x, priority: !x.priority } : x));
+    if (!g.priority) toast(t('prio_on', g.label));
+    saveSettings();
+    return renderSettings();
+  }
   if (b.hasAttribute('data-offline')) return downloadAll(b);
   if (b.hasAttribute('data-offline-clear')) {
     if (!confirm(t('offline_clear_confirm'))) return;
@@ -1154,7 +1287,7 @@ const player = initPlayer({
     if (markRead(item)) { const k = sel.fil.indexOf(item); const seg = $('#progress').children[k]; if (seg) seg.classList.add('read'); }
   },
   toggleFull: () => { settings.audioFull = settings.audioFull === false; store.set('settings', settings); },
-  onFinished: () => { haptic(2); },
+  onFinished: () => { haptic(2); onDayDone(); }, // écouter tout le journal compte aussi pour la série
 });
 $('#listen-btn').addEventListener('click', () => { if (player.isActive()) player.toggle(); else player.start(); });
 
@@ -1181,6 +1314,9 @@ applyLanguage();
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 $('#ess-sub').textContent = t('loading');
 load().then(refreshInbox);
+// Une fois par jour : l'app a été ouverte, donc le rappel du soir n'est pas ignoré.
+if (store.get('seenDay', '') !== dayKey()) { store.set('seenDay', dayKey()); setTimeout(() => syncProgress({}), 3000); }
+setTimeout(() => syncPushLang(false), 3500); // fuseau horaire ou réglages changés depuis le dernier envoi
 updateBadge();
 if (!store.get('onboarded', false)) show('profil');
 else handleHash();

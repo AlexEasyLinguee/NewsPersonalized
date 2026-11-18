@@ -4,7 +4,8 @@
 // 2. /push/* : abonnements aux notifications, gardés dans le stockage KV « CLAIR ».
 // 3. /speak : lit un morceau de texte à voix haute (MeloTTS, Workers AI).
 // 3 bis. /me, /friends, /share, /inbox : amis et partage d'articles (voir friends.js).
-// 4. Tâche planifiée : chaque matin, une notification « Ton édition est prête » à tous les abonnés.
+// 4. Tâche planifiée : chaque matin, une notification « Ton édition est prête » à tous les abonnés ;
+//    chaque heure, le rappel du soir (sur demande) à ceux dont c'est l'heure et qui n'ont pas fini leur édition.
 // Déployé automatiquement par GitHub Actions (.github/workflows/worker.yml).
 
 import { generateVapid, sendPush } from './webpush.js';
@@ -122,6 +123,86 @@ function morningMessage(edition, lang) {
   return { title: tx.title, body: headline ? tx.lead + headline : tx.fallback, url: APP_URL };
 }
 
+/* ---------- Rappel du soir ---------- */
+const nrm = (x) => ` ${String(x ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()} `;
+// Combien d'histoires du jour touchent chaque sujet prioritaire (mêmes règles que l'app).
+function priorityHits(edition, priorities) {
+  const items = (edition.items || []).filter((i) => !i.fait_divers && i.importance >= 2);
+  const texts = items.map((i) => nrm([...(i.tags || []), i.title, i.summary, i.title_en, i.summary_en].join(' ')));
+  const hits = [];
+  const seen = new Set();
+  for (const g of priorities || []) {
+    let n = 0;
+    texts.forEach((txt, k) => {
+      if (seen.has(k)) return;
+      if ((g.keywords || []).some((kw) => { const w = nrm(kw); return w.trim() && txt.includes(w); })) { n++; seen.add(k); }
+    });
+    if (n) hits.push({ label: g.label, n });
+  }
+  return hits;
+}
+const EVENING = {
+  fr: {
+    title: (h) => (h <= 1 ? 'Tes news se renouvellent dans moins d\u2019une heure' : `Tes news se renouvellent dans ${h} h`),
+    hits: (n, labels) => (n === 1 ? `Dedans, une histoire qui devrait vraiment t\u2019intéresser : ${labels}.` : `Dedans, ${n} histoires qui devraient vraiment t\u2019intéresser : ${labels}.`),
+    plain: 'Ton édition t\u2019attend encore, 3 minutes suffisent.',
+    streak: (n) => ` Et ta série de ${n} jours continue ☀️`,
+    and: ' et ',
+  },
+  en: {
+    title: (h) => (h <= 1 ? 'Your news refreshes in under an hour' : `Your news refreshes in ${h} h`),
+    hits: (n, labels) => (n === 1 ? `Inside, one story you\u2019ll really want to see: ${labels}.` : `Inside, ${n} stories you\u2019ll really want to see: ${labels}.`),
+    plain: 'Your edition is still waiting, 3 minutes is all it takes.',
+    streak: (n) => ` And your ${n}-day streak keeps going ☀️`,
+    and: ' and ',
+  },
+};
+const localDay = (ms) => new Date(ms).toISOString().slice(0, 10);
+// Chaque heure : un rappel aux personnes qui l'ont demandé, à leur heure locale, si l'édition n'est pas finie.
+async function notifyEvening(env) {
+  const res = await fetch(`${EDITION_URL}?t=${Date.now()}`, { cf: { cacheTtl: 0 } });
+  if (!res.ok) return;
+  const edition = await res.json();
+  const generated = Date.parse(edition.generated_at);
+  if (!generated || Date.now() - generated > 26 * 3600e3) return; // pas d'édition récente : pas de rappel
+  const now = Date.now();
+  // La prochaine édition sort vers 6 h UTC.
+  const next = new Date(now);
+  next.setUTCHours(6, 0, 0, 0);
+  if (next.getTime() <= now) next.setUTCDate(next.getUTCDate() + 1);
+  const hoursLeft = Math.max(1, Math.round((next.getTime() - now) / 3600e3));
+  const vapid = await getVapid(env);
+  let cursor;
+  do {
+    const page = await env.CLAIR.list({ prefix: 'sub:', cursor });
+    for (const k of page.keys) {
+      const rec = await env.CLAIR.get(k.name, 'json');
+      if (!rec?.evening?.on) continue;
+      const local = now + (rec.tz || 0) * 60e3;
+      if (new Date(local).getUTCHours() !== rec.evening.hour) continue;
+      const today = localDay(local);
+      const yesterday = localDay(local - 24 * 3600e3);
+      if (rec.done === today || rec.lastEvening === today) continue; // déjà lu, ou déjà rappelé
+      if ((rec.ignored || 0) >= 3) continue; // ignoré 3 soirs de suite : on se tait
+      const tx = EVENING[rec.lang] || EVENING.fr;
+      const hits = priorityHits(edition, rec.priorities);
+      const total = hits.reduce((a, h) => a + h.n, 0);
+      const labels = hits.slice(0, 3).map((h) => h.label);
+      const list = labels.length > 1 ? `${labels.slice(0, -1).join(', ')}${tx.and}${labels.at(-1)}` : labels[0];
+      let body = total ? tx.hits(total, list) : tx.plain;
+      if (rec.done === yesterday && rec.streak >= 2) body += tx.streak(rec.streak);
+      try {
+        const status = await sendPush(rec.sub, { title: tx.title(hoursLeft), body, url: APP_URL }, vapid, PUSH_SUBJECT);
+        if (status === 404 || status === 410) { await env.CLAIR.delete(k.name); continue; }
+        rec.lastEvening = today;
+        rec.ignored = (rec.ignored || 0) + 1;
+        await env.CLAIR.put(k.name, JSON.stringify(rec));
+      } catch { /* on passe au suivant */ }
+    }
+    cursor = page.list_complete ? undefined : page.cursor;
+  } while (cursor);
+}
+
 // Envoie la notification du matin si une nouvelle édition est sortie depuis le dernier envoi.
 async function notifyMorning(env) {
   const res = await fetch(`${EDITION_URL}?t=${Date.now()}`, { cf: { cacheTtl: 0 } });
@@ -159,12 +240,32 @@ async function handlePush(path, request, env, origin) {
     const lang = body.lang === 'en' ? 'en' : 'fr';
     const key = await subKey(sub.endpoint);
     if (body.token) await linkPush(env, String(body.token), key, lang);
-    await env.CLAIR.put(key, JSON.stringify({ sub: { endpoint: sub.endpoint, keys: { p256dh: sub.keys.p256dh, auth: sub.keys.auth } }, lang, at: new Date().toISOString() }));
+    const old = (await env.CLAIR.get(key, 'json')) || {};
+    const rec = { ...old, sub: { endpoint: sub.endpoint, keys: { p256dh: sub.keys.p256dh, auth: sub.keys.auth } }, lang, at: new Date().toISOString() };
+    if (body.evening) rec.evening = { on: !!body.evening.on, hour: Math.min(23, Math.max(0, Number(body.evening.hour) || 20)) };
+    if (Number.isFinite(Number(body.tz))) rec.tz = Math.max(-720, Math.min(840, Math.round(Number(body.tz))));
+    // Sujets prioritaires : gardés seulement si le rappel du soir est activé.
+    if (Array.isArray(body.priorities)) rec.priorities = rec.evening?.on ? cleanGroups(body.priorities, 5) : [];
+    if (rec.evening?.on && !old.evening?.on) rec.ignored = 0;
+    await env.CLAIR.put(key, JSON.stringify(rec));
     if (body.test) {
       const tx = PUSH_TEXT[lang];
       const status = await sendPush(sub, { title: 'Clair', body: tx.test, url: APP_URL }, await getVapid(env), PUSH_SUBJECT).catch(() => 0);
       return json({ ok: true, test: status }, 200, origin);
     }
+    return json({ ok: true }, 200, origin);
+  }
+  if (path === '/push/progress') {
+    // L'app signale qu'elle a été ouverte (seen) ou que l'édition du jour est finie (done).
+    if (!body.endpoint) return json({ error: 'endpoint' }, 400, origin);
+    const key = await subKey(String(body.endpoint));
+    const rec = await env.CLAIR.get(key, 'json');
+    if (!rec) return json({ ok: false }, 200, origin);
+    const day = /^\d{4}-\d{2}-\d{2}$/;
+    let changed = false;
+    if (day.test(body.done || '') && rec.done !== body.done) { rec.done = body.done; rec.streak = Math.max(0, Number(body.streak) || 0); changed = true; }
+    if (day.test(body.seen || '') && rec.ignored) { rec.ignored = 0; changed = true; }
+    if (changed) await env.CLAIR.put(key, JSON.stringify(rec));
     return json({ ok: true }, 200, origin);
   }
   if (path === '/push/unsubscribe') {
@@ -307,6 +408,8 @@ export default {
     return handleProfile(request, env, origin);
   },
   async scheduled(event, env, ctx) {
-    if (env.CLAIR) ctx.waitUntil(notifyMorning(env));
+    if (!env.CLAIR) return;
+    if (event.cron === '7 * * * *') ctx.waitUntil(notifyEvening(env));
+    else ctx.waitUntil(notifyMorning(env));
   },
 };
