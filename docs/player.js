@@ -124,6 +124,8 @@ export function initPlayer(ctx) {
     const a = itemAudio(entry.item);
     const intro = a ? [{ file: a.f }] : [];
     if (!full()) return intro;
+    const ol = entry.item.orig_lang;
+    if (ol && ol !== 'fr' && ol !== 'en') return intro; // pas de voix pour cette langue : le résumé suffit
     const art = await ctx.getArticle(entry.item).catch(() => null);
     if (!art?.blocks?.length) return intro.length ? intro : [];
     const body = chunks(art.blocks);

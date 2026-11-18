@@ -52,7 +52,9 @@ const topicLabel = (id) => (id === 'monde' ? t('topic_world') : catLabel(id));
 // (repli sur le français pour les anciennes éditions).
 const nrm = (x) => String(x || '').toLowerCase().replace(/[^a-z0-9à-ÿ]+/g, ' ').trim();
 function tx(item, f) {
-  if (settings.articleLang === 'original' && item.orig_title) {
+  // Version originale seulement si elle est en français ou en anglais ; sinon, la traduction.
+  const origReadable = !item.orig_lang || item.orig_lang === 'fr' || item.orig_lang === 'en';
+  if (settings.articleLang === 'original' && item.orig_title && origReadable) {
     if (f === 'title') return item.orig_title;
     const sum = item.orig_summary || '';
     return nrm(sum).startsWith(nrm(item.orig_title).slice(0, 40)) ? '' : sum; // pas de résumé qui répète le titre

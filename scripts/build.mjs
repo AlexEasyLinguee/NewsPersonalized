@@ -137,6 +137,7 @@ Pour chaque article reçu, renvoie un objet avec :
 - "tags" : 4 à 8 mots-clés en minuscules qui décrivent précisément le sujet (personnes, entreprises, activités, objets, lieux), en français et, pour les termes courants, aussi en anglais (ex. ["surf", "océan", "portugal", "nazaré", "big wave"]).
 - "title_fr" : titre clair et factuel en français, sans sensationnalisme, 90 caractères max.
 - "summary_fr" : résumé en français en une ou deux phrases (220 caractères max), qui dit pourquoi c'est intéressant ou important. N'invente aucun fait absent de l'article.
+- "lang" : la langue de l'article d'origine, code ISO à deux lettres (ex. "fr", "en", "es", "de", "id").
 - "title_en" et "summary_en" : les mêmes titre et résumé, en anglais naturel.
 - "radio_fr" : la même info racontée à l'oral par un présentateur de radio chaleureux et posé, en 2 ou 3 phrases (350 caractères max), avec une courte accroche qui situe le sujet (ex. « Direction le Pacifique, avec une très bonne nouvelle pour les océans. »). Phrases simples, faciles à suivre à l'oreille : pas de parenthèses, d'abréviations, de liens ni de listes ; écris les sigles comme ils se prononcent si besoin. N'invente aucun fait.
 - "radio_en" : le même texte radio, en anglais naturel.
@@ -246,6 +247,7 @@ function clean(r, src) {
     category,
     fait_divers: Boolean(r.fait_divers),
     fiable: r.fiable !== false,
+    orig_lang: /^[a-z]{2}$/.test(String(r.lang || '')) ? String(r.lang) : undefined,
     places: arr(r.places).map(String).slice(0, 6),
     tags: arr(r.tags).map((t) => String(t).toLowerCase()).slice(0, 10),
   };
