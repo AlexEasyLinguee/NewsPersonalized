@@ -114,5 +114,61 @@
   {
     "name": "Le Monde – Économie",
     "url": "https://www.lemonde.fr/economie/rss_full.xml"
+  },
+  {
+    "name": "Al Jazeera",
+    "url": "https://www.aljazeera.com/xml/rss/all.xml"
+  },
+  {
+    "name": "DW (Allemagne)",
+    "url": "https://rss.dw.com/rdf/rss-en-all"
+  },
+  {
+    "name": "RFI",
+    "url": "https://www.rfi.fr/fr/rss"
+  },
+  {
+    "name": "Courrier international",
+    "url": "https://www.courrierinternational.com/feed/all/rss.xml"
+  },
+  {
+    "name": "South China Morning Post",
+    "url": "https://www.scmp.com/rss/91/feed"
+  },
+  {
+    "name": "The Japan Times",
+    "url": "https://www.japantimes.co.jp/feed/"
+  },
+  {
+    "name": "The Hindu (Inde)",
+    "url": "https://www.thehindu.com/news/international/feeder/default.rss"
+  },
+  {
+    "name": "ABC News (Australie)",
+    "url": "https://www.abc.net.au/news/feed/2942460/rss.xml"
+  },
+  {
+    "name": "Mail & Guardian (Afrique du Sud)",
+    "url": "https://mg.co.za/feed/"
+  },
+  {
+    "name": "AllAfrica",
+    "url": "https://allafrica.com/tools/headlines/rdf/latest/headlines.rdf"
+  },
+  {
+    "name": "MercoPress (Amérique latine)",
+    "url": "https://en.mercopress.com/rss/"
+  },
+  {
+    "name": "El País (English)",
+    "url": "https://feeds.elpais.com/mrss-s/pages/ep/site/english.elpais.com/portada"
+  },
+  {
+    "name": "Rest of World",
+    "url": "https://restofworld.org/feed/latest"
+  },
+  {
+    "name": "Global Voices",
+    "url": "https://globalvoices.org/feed/"
   }
 ]

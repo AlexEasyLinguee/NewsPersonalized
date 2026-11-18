@@ -9,8 +9,8 @@ const ROOT = new URL('..', import.meta.url);
 const SOURCES = JSON.parse(await fs.readFile(new URL('sources.json', ROOT), 'utf8'));
 
 const MAX_AGE_HOURS = 30;     // on ne garde que les articles récents
-const PER_SOURCE = 15;        // max d'articles lus par source
-const MAX_ITEMS = 300;        // plafond total envoyé à l'IA (limites de l'offre gratuite)
+const PER_SOURCE = 10;        // max d'articles lus par source
+const MAX_ITEMS = 330;        // plafond total envoyé à l'IA (limites de l'offre gratuite)
 const BATCH = 15;             // articles par requête IA
 const PAUSE_MS = 4500;        // pause entre deux requêtes IA
 // IA : Google Gemini, offre gratuite (clé dans le secret GEMINI_API_KEY du dépôt).
@@ -125,11 +125,13 @@ async function fetchSource(src) {
 }
 
 const SYSTEM = `Tu tries l'actualité pour une app d'infos qui met en avant les bonnes nouvelles sans cacher l'essentiel.
+Juge chaque article pour un lecteur citoyen du monde : sa pertinence et sa portée comptent, pas le pays ni le média d'origine. Une avancée majeure rapportée par un journal indien, africain ou sud-américain vaut autant que si elle venait d'un grand média européen ou américain ; ne privilégie pas l'Europe ni les États-Unis.
 Pour chaque article reçu, renvoie un objet avec :
 - "id" : l'id reçu
 - "importance" : entier 0-10. 10 = événement historique mondial. 8-9 = info mondiale majeure que tout le monde devrait connaître (catastrophe naturelle de grande ampleur, crash d'avion de ligne, escalade d'une guerre, élection majeure, découverte scientifique majeure). 5-7 = info significative à l'échelle d'un pays ou d'une région. 0-4 = info mineure, locale, anecdotique. 0 = publicité, bon plan, contenu promotionnel.
 - "tone" : "positive" (progrès, découverte, solution, invention utile, réussite écologique, histoire humaine qui fait du bien, belle nature), "neutral" (information factuelle sans charge négative, ex. un lancement de fusée, une annonce d'IA), ou "negative" (drame, conflit, crise, catastrophe, polémique).
 - "category" : un seul parmi ${CATEGORIES.join(', ')}. inventions = inventions et innovations qui améliorent le monde ; sante = santé et médecine ; ia = intelligence artificielle ; espace = spatial, astronomie, SpaceX/Starship ; ecologie = climat, énergie, environnement ; animaux = animaux et nature ; reportages = beaux reportages, culture, voyages ; sourires = histoires humaines touchantes ; sport = sport ; culture = cinéma, musique, arts, livres, gastronomie ; tech = technologie hors IA ; economie = économie, entreprises, finance ; monde = politique et géopolitique internationale ; aviation = aviation et transport aérien ; autre = le reste.
+- "fiable" : false si l'article ne vient pas d'une rédaction sérieuse (blog, site partisan ou complotiste, presse à scandale, contenu sponsorisé, simple communiqué de presse, agrégateur douteux), sinon true. Le nom du média est indiqué dans "source" ou à la fin du titre.
 - "fait_divers" : true pour les faits divers (crime local, petit accident, people et ragots, faits isolés sans portée générale), sinon false. Le sport n'est pas un fait divers.
 - "places" : liste des pays, régions ou villes principalement concernés, en français (ex. ["Bali", "Indonésie"]). Liste vide si aucun.
 - "tags" : 4 à 8 mots-clés en minuscules qui décrivent précisément le sujet (personnes, entreprises, activités, objets, lieux), en français et, pour les termes courants, aussi en anglais (ex. ["surf", "océan", "portugal", "nazaré", "big wave"]).
@@ -243,6 +245,7 @@ function clean(r, src) {
     tone,
     category,
     fait_divers: Boolean(r.fait_divers),
+    fiable: r.fiable !== false,
     places: arr(r.places).map(String).slice(0, 6),
     tags: arr(r.tags).map((t) => String(t).toLowerCase()).slice(0, 10),
   };
@@ -301,7 +304,7 @@ async function main() {
   }
   if (!scored.length) throw new Error(`Aucun article noté (${failures} lots en échec).`);
 
-  const kept = scored.filter((s) => s.importance > 0).sort((a, b) => b.importance - a.importance);
+  const kept = scored.filter((s) => s.importance > 0 && s.fiable !== false).sort((a, b) => b.importance - a.importance);
   const edition = { generated_at: new Date().toISOString(), model: MODEL, count: kept.length, items: kept };
   await fs.mkdir(new URL('docs/', ROOT), { recursive: true });
   await fs.writeFile(new URL('docs/edition.json', ROOT), JSON.stringify(edition));
