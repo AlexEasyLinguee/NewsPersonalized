@@ -153,7 +153,8 @@ function ding(big = false) {
   if (!settings.sound) return;
   try {
     if (!audio) {
-      if (navigator.audioSession) navigator.audioSession.type = 'ambient'; // respecte le mode silencieux
+      // Le petit « ding » respecte le mode silencieux, sauf pendant l'écoute du journal audio.
+      if (navigator.audioSession && !player.isActive()) navigator.audioSession.type = 'ambient';
       audio = new (window.AudioContext || window.webkitAudioContext)();
     }
     audio.resume();

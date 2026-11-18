@@ -236,7 +236,8 @@ export default {
         const b64 = typeof out === 'string' ? out : out?.audio;
         if (!b64) return json({ error: 'voice' }, 502, origin);
         const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
-        return new Response(bytes, { headers: { 'Content-Type': 'audio/mpeg', 'Cache-Control': 'no-store', ...cors(origin) } });
+        const wav = bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46; // « RIFF »
+        return new Response(bytes, { headers: { 'Content-Type': wav ? 'audio/wav' : 'audio/mpeg', 'Cache-Control': 'no-store', ...cors(origin) } });
       } catch (e) {
         return json({ error: 'voice', detail: String(e.message || e).slice(0, 200) }, 502, origin);
       }

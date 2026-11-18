@@ -68,17 +68,21 @@ export function initPlayer(ctx) {
   async function fileBlob(file) {
     const url = base + file;
     let cache = null;
-    try { cache = await caches.open(AUDIO_CACHE); const hit = await cache.match(url); if (hit) return hit.blob(); } catch { /* */ }
+    try { cache = await caches.open(AUDIO_CACHE); const hit = await cache.match(url); if (hit) return new Blob([await hit.arrayBuffer()], { type: 'audio/mpeg' }); } catch { /* */ }
     const res = await fetch(url);
     if (!res.ok) throw new Error('audio');
-    const blob = await res.blob();
+    const blob = new Blob([await res.arrayBuffer()], { type: 'audio/mpeg' });
     try { cache && cache.put(url, new Response(blob, { headers: { 'Content-Type': 'audio/mpeg' } })); } catch { /* */ }
     return blob;
   }
   async function speechBlob(text, lang) {
     const res = await fetch(`${ctx.relay}/speak`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, lang }), signal: AbortSignal.timeout(30000) });
     if (!res.ok) throw new Error('voice');
-    return res.blob();
+    const buf = await res.arrayBuffer();
+    // La voix peut renvoyer du WAV ou du MP3 : on donne le bon type, sinon l'iPhone refuse de le lire.
+    const h = new Uint8Array(buf.slice(0, 4));
+    const type = h[0] === 0x52 && h[1] === 0x49 && h[2] === 0x46 && h[3] === 0x46 ? 'audio/wav' : 'audio/mpeg';
+    return new Blob([buf], { type });
   }
   const partKey = (p) => (p.file ? `f:${p.file}` : `s:${p.lang}:${p.text.slice(0, 80)}:${p.text.length}`);
   function loadPart(p) {
@@ -198,7 +202,12 @@ export function initPlayer(ctx) {
   }
 
   /* ---------- Commandes ---------- */
+  // Un journal audio doit s'entendre même en mode silencieux, et continuer écran verrouillé.
+  function playbackSession() { try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch { /* */ } }
+  audio.addEventListener('play', playbackSession);
+
   async function start() {
+    playbackSession();
     await loadManifest();
     queue = buildQueue();
     if (!queue.some((x) => x.kind === 'item')) { toast(t(manifest ? 'listen_empty' : 'listen_not_ready')); return; }
@@ -207,6 +216,7 @@ export function initPlayer(ctx) {
     startTrack(0);
   }
   function toggle() {
+    playbackSession();
     if (qi < 0 || qi >= queue.length) return start();
     if (audio.paused) audio.play().catch(() => {}); else audio.pause();
   }
