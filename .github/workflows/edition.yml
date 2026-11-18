@@ -156,5 +156,8 @@ jobs:
       - uses: actions/upload-pages-artifact@v3
         with:
           path: docs
+          name: github-pages-audio   # nom distinct : l'édition a déjà publié « github-pages » dans cette exécution
       - id: deployment
         uses: actions/deploy-pages@v4
+        with:
+          artifact_name: github-pages-audio
