@@ -216,13 +216,61 @@ async function handleProfile(request, env, origin) {
     }
 }
 
+/* ---------- Sujet ajouté à la main ---------- */
+const TOPIC_SYSTEM = `Une personne veut suivre un sujet dans une app d'actualités. À partir de ce qu'elle écrit, renvoie uniquement du JSON :
+{"label": "nom court du sujet (3 à 5 mots) dans la langue demandée", "keywords": ["8 à 12 mots-clés en minuscules, en français ET en anglais, du plus précis au plus large, qui permettent de reconnaître un article sur ce sujet ; évite les mots trop généraux qui attraperaient des articles sans rapport"], "query": "une requête de recherche d'actualités en anglais, 2 à 5 mots, qui trouve les articles sur ce sujet"}`;
+const topicKey = async (q) => {
+  const h = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(q.toLowerCase())));
+  return `topic:${[...h.slice(0, 10)].map((b) => b.toString(16).padStart(2, '0')).join('')}`;
+};
+async function handleTopic(request, env, origin) {
+  let text = '';
+  let lang = 'fr';
+  try { const b = await request.json(); text = String(b.text || '').trim().slice(0, 200); if (b.lang === 'en') lang = 'en'; } catch { /* */ }
+  if (text.length < 3) return json({ error: 'text' }, 400, origin);
+  try {
+    const model = await pickModel(env);
+    const res = await fetch(`${GEMINI}/openai/chat/completions`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${env.GEMINI_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model, temperature: 0.2, response_format: { type: 'json_object' },
+        messages: [{ role: 'system', content: `${TOPIC_SYSTEM}\nLangue du label : ${lang === 'en' ? 'anglais' : 'français'}.` }, { role: 'user', content: text }] }),
+      signal: AbortSignal.timeout(20000),
+    });
+    if (!res.ok) return json({ error: 'ai' }, 502, origin);
+    const out = JSON.parse(((await res.json()).choices?.[0]?.message?.content || '{}').replace(/^```(json)?|```$/g, '').trim());
+    const [group] = cleanGroups([{ label: out.label || text, keywords: out.keywords }], 1);
+    const query = String(out.query || '').replace(/[^\p{L}\p{N} '-]/gu, ' ').replace(/\s+/g, ' ').trim().slice(0, 60);
+    // Le sujet (sans rien qui identifie la personne) devient une recherche ajoutée aux sources du matin, pendant 60 jours.
+    if (query && env.CLAIR) await env.CLAIR.put(await topicKey(query), JSON.stringify({ q: query, at: new Date().toISOString() }), { expirationTtl: 60 * 24 * 3600 });
+    return json({ group: group || { label: text.slice(0, 40), keywords: [text.toLowerCase()] }, query }, 200, origin);
+  } catch {
+    return json({ error: 'ai' }, 502, origin);
+  }
+}
+async function listTopics(env) {
+  const out = [];
+  let cursor;
+  do {
+    const page = await env.CLAIR.list({ prefix: 'topic:', cursor });
+    for (const k of page.keys) { const v = await env.CLAIR.get(k.name, 'json'); if (v?.q) out.push(v.q); }
+    cursor = page.list_complete ? undefined : page.cursor;
+  } while (cursor && out.length < 200);
+  return out;
+}
+
 export default {
   async fetch(request, env, ctx) {
     const origin = request.headers.get('Origin') || '';
+    // Liste des sujets suivis (anonyme), lue par la tâche du matin sur GitHub.
+    if (request.method === 'GET' && new URL(request.url).pathname === '/topics' && env.CLAIR) {
+      return new Response(JSON.stringify({ topics: await listTopics(env) }), { headers: { 'Content-Type': 'application/json' } });
+    }
     if (!ALLOWED_ORIGINS.includes(origin)) return new Response('Forbidden', { status: 403 });
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors(origin) });
     const path = new URL(request.url).pathname.replace(/\/+$/, '') || '/';
     if (path.startsWith('/push/')) return handlePush(path, request, env, origin);
+    if (path === '/topic' && request.method === 'POST') return handleTopic(request, env, origin);
     if (path === '/speak') {
       // Lecture à voix haute d'un morceau d'article (voix MeloTTS de Cloudflare Workers AI).
       if (!env.AI) return json({ error: 'Voix non configurée.' }, 503, origin);

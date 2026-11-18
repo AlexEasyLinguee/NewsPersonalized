@@ -252,7 +252,17 @@ async function main() {
   if (!TOKEN && !process.env.MOCK_AI) throw new Error('Secret GEMINI_API_KEY manquant : ajoute ta clé Gemini dans Settings › Secrets and variables › Actions.');
   await pickModel();
 
-  const lists = await Promise.all(SOURCES.map(fetchSource));
+  // Sujets ajoutés à la main par les utilisateurs : une recherche d'actualités chacun.
+  const extra = [];
+  try {
+    const res = await fetch('https://clair-profil.alexis-lecussan.workers.dev/topics', { signal: AbortSignal.timeout(10000) });
+    const { topics = [] } = await res.json();
+    for (const q of topics.slice(0, 40)) {
+      extra.push({ name: `Recherche – ${q}`, url: `https://news.google.com/rss/search?q=${encodeURIComponent(q)}+when:3d&hl=en-US&gl=US&ceid=US:en` });
+    }
+    console.log(`${extra.length} sujets suivis ajoutés aux sources`);
+  } catch (e) { console.log(`Sujets suivis indisponibles : ${e.message}`); }
+  const lists = await Promise.all([...SOURCES, ...extra].map(fetchSource));
   // On alterne les sources pour qu'aucune ne monopolise le plafond.
   const merged = [];
   for (let i = 0; i < PER_SOURCE; i++) for (const l of lists) if (l[i]) merged.push(l[i]);

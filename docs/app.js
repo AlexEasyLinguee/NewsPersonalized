@@ -501,6 +501,20 @@ function groupTags(key, title) {
   return `<p class="small" style="margin:8px 0 6px;font-weight:700">${esc(title)}</p>
     <div class="tags">${groups.map((g, k) => `<span class="tag">${esc(g.label)}<button type="button" data-rm-group="${key}:${k}" aria-label="${esc(t('remove', g.label))}">×</button></span>`).join('')}</div>`;
 }
+let topicKind = 'keep_informed';
+async function addTopic(text) {
+  let group = { label: text.slice(0, 40), keywords: [text.toLowerCase()] };
+  if (WORKER_URL && navigator.onLine) {
+    try {
+      const res = await fetch(`${PUSH_BASE}/topic`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, lang: settings.lang }), signal: AbortSignal.timeout(25000) });
+      const data = await res.json();
+      if (res.ok && data.group) group = data.group;
+    } catch { /* hors ligne : on garde le texte comme mot-clé */ }
+  }
+  settings[topicKind] = [...(settings[topicKind] || []).filter((g) => g.label !== group.label), group];
+  saveSettings();
+  return group;
+}
 function renderSettings() {
   const lvl = levelOf(settings.level);
   $('#settings').innerHTML = `
@@ -521,6 +535,16 @@ function renderSettings() {
       ${groupTags('interests', t('g_interests'))}
       ${groupTags('keep_informed', t('g_keep'))}
       ${groupTags('avoid', t('g_avoid'))}
+      <form id="topic-form" class="topic-form">
+        <label class="small" for="topic-input" style="font-weight:700">${esc(t('topic_add_title'))}</label>
+        <input id="topic-input" maxlength="200" placeholder="${esc(t('topic_add_ph'))}" autocomplete="off">
+        <div class="seg" role="group" aria-label="${esc(t('topic_add_title'))}">
+          <button type="button" data-topic-kind="interests" aria-pressed="${topicKind === 'interests'}">${esc(t('topic_kind_love'))}</button>
+          <button type="button" data-topic-kind="keep_informed" aria-pressed="${topicKind === 'keep_informed'}">${esc(t('topic_kind_keep'))}</button>
+          <button type="button" data-topic-kind="avoid" aria-pressed="${topicKind === 'avoid'}">${esc(t('topic_kind_avoid'))}</button>
+        </div>
+        <button type="submit" class="cta" style="margin:0;width:100%">${esc(t('topic_add_btn'))}</button>
+      </form>
       <button type="button" class="outline-btn" data-edit-profile style="width:100%;margin-top:6px">${esc(settings.resume ? t('redo_profile') : t('create_profile'))}</button>
     </section>
     <section>
@@ -579,6 +603,7 @@ $('#settings').addEventListener('click', (e) => {
   const b = e.target.closest('button');
   if (!b) return;
   if (b.hasAttribute('data-edit-profile')) return show('profil');
+  if (b.dataset.topicKind) { topicKind = b.dataset.topicKind; document.querySelectorAll('[data-topic-kind]').forEach((x) => x.setAttribute('aria-pressed', String(x === b))); return; }
   if (b.hasAttribute('data-push')) return togglePush(b, renderSettings);
   if (b.hasAttribute('data-offline')) return downloadAll(b);
   if (b.hasAttribute('data-offline-clear')) {
@@ -608,8 +633,18 @@ $('#settings').addEventListener('click', (e) => {
   saveSettings();
   renderSettings();
 });
-$('#settings').addEventListener('submit', (e) => {
+$('#settings').addEventListener('submit', async (e) => {
   e.preventDefault();
+  if (e.target.id === 'topic-form') {
+    const v = $('#topic-input').value.trim();
+    if (v.length < 3) return;
+    const btn = e.target.querySelector('button[type=submit]');
+    btn.disabled = true;
+    btn.textContent = t('topic_adding');
+    const g = await addTopic(v);
+    toast(t('topic_added', g.label));
+    return renderSettings();
+  }
   const v = $('#place-input').value.trim();
   if (v && !settings.places.includes(v)) { settings.places = [...settings.places, v]; saveSettings(); }
   renderSettings();

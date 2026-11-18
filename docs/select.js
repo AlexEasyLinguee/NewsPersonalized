@@ -154,7 +154,7 @@ export function select(edition, s) {
   const pool = [];
   for (const i of items) {
     if (used.has(i.id) || i.tone === 'negative') continue;
-    const loves = matchGroups(i, s.interests);
+    const loves = matchGroups(i, [...(s.interests || []), ...(s.keep_informed || [])]); // sujets suivis : remontent aussi dans le fil
     const inTheme = s.themes.includes(themeOf(i.category));
     const toneOk = i.tone === 'positive' || (i.tone === 'neutral' && (loves.length ? i.importance >= 3 : NEUTRAL_OK.includes(i.category) && i.importance >= 4));
     if (!toneOk || (!inTheme && !loves.length)) continue;
