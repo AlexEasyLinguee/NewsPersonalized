@@ -48,8 +48,19 @@ jobs:
       - uses: actions/upload-pages-artifact@v3
         with:
           path: docs
+          name: pages-app-${{ github.run_attempt }}   # nom unique par tâche et par tentative : les relances ne se gênent pas
       - id: deployment
+        continue-on-error: true
         uses: actions/deploy-pages@v4
+        with:
+          artifact_name: pages-app-${{ github.run_attempt }}
+      # GitHub met parfois quelques secondes à « voir » le paquet envoyé : on réessaie une fois.
+      - if: steps.deployment.outcome == 'failure'
+        run: sleep 45
+      - if: steps.deployment.outcome == 'failure'
+        uses: actions/deploy-pages@v4
+        with:
+          artifact_name: pages-app-${{ github.run_attempt }}
 
   # ---------- Nouvelle édition ----------
   check:
@@ -92,8 +103,19 @@ jobs:
       - uses: actions/upload-pages-artifact@v3
         with:
           path: docs
+          name: pages-edition-${{ github.run_attempt }}   # nom unique par tâche et par tentative : les relances ne se gênent pas
       - id: deployment
+        continue-on-error: true
         uses: actions/deploy-pages@v4
+        with:
+          artifact_name: pages-edition-${{ github.run_attempt }}
+      # GitHub met parfois quelques secondes à « voir » le paquet envoyé : on réessaie une fois.
+      - if: steps.deployment.outcome == 'failure'
+        run: sleep 45
+      - if: steps.deployment.outcome == 'failure'
+        uses: actions/deploy-pages@v4
+        with:
+          artifact_name: pages-edition-${{ github.run_attempt }}
 
   audio:
     needs: edition
@@ -156,8 +178,16 @@ jobs:
       - uses: actions/upload-pages-artifact@v3
         with:
           path: docs
-          name: github-pages-audio-${{ github.run_attempt }}   # nom distinct : l'édition a déjà publié « github-pages » dans cette exécution
+          name: pages-audio-${{ github.run_attempt }}   # nom unique par tâche et par tentative : les relances ne se gênent pas
       - id: deployment
+        continue-on-error: true
         uses: actions/deploy-pages@v4
         with:
-          artifact_name: github-pages-audio-${{ github.run_attempt }}
+          artifact_name: pages-audio-${{ github.run_attempt }}
+      # GitHub met parfois quelques secondes à « voir » le paquet envoyé : on réessaie une fois.
+      - if: steps.deployment.outcome == 'failure'
+        run: sleep 45
+      - if: steps.deployment.outcome == 'failure'
+        uses: actions/deploy-pages@v4
+        with:
+          artifact_name: pages-audio-${{ github.run_attempt }}
