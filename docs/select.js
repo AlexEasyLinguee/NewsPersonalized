@@ -74,7 +74,7 @@ const words = (s) => ` ${norm(s).replace(/[^a-z0-9]+/g, ' ').trim()} `;
 
 const textCache = new WeakMap();
 function textOf(item) {
-  if (!textCache.has(item)) textCache.set(item, words([...(item.tags || []), item.title, item.summary].join(' ')));
+  if (!textCache.has(item)) textCache.set(item, words([...(item.tags || []), item.title, item.summary, item.title_en, item.summary_en, item.orig_title].join(' ')));
   return textCache.get(item);
 }
 
@@ -143,7 +143,10 @@ export const MAX_PRIORITY = 5;
 export function select(edition, s) {
   const avoided = (i) => i.importance < 9 && matchGroups(i, s.avoid).length > 0;
   const prios = priorityGroups(s);
-  const items = dedupe((edition.items || []).filter((i) => !i.fait_divers && !avoided(i)));
+  // Articles venus de la recherche d'un sujet ajouté par quelqu'un : seulement pour ceux qui le suivent.
+  const mine = [...(s.interests || []), ...(s.keep_informed || [])];
+  const forMe = (i) => !i.search || matchGroups(i, mine).length > 0;
+  const items = dedupe((edition.items || []).filter((i) => !i.fait_divers && !avoided(i) && forMe(i)));
   const threshold = s.level === 'full' ? 6 : 8;
 
   // 1. L'essentiel : infos graves ou neutres, seulement si elles comptent vraiment.

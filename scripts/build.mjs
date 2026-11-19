@@ -239,6 +239,7 @@ function clean(r, src) {
     radio: r.radio_fr ? String(r.radio_fr).slice(0, 450) : undefined,
     radio_en: r.radio_en ? String(r.radio_en).slice(0, 450) : undefined,
     url: src.url,
+    search: src.search || undefined,
     image: src.image,
     source: src.source,
     published: src.published,
@@ -267,7 +268,12 @@ async function main() {
     }
     console.log(`${extra.length} sujets suivis ajoutés aux sources`);
   } catch (e) { console.log(`Sujets suivis indisponibles : ${e.message}`); }
-  const lists = await Promise.all([...SOURCES, ...extra].map(fetchSource));
+  // Les articles des recherches personnelles sont marqués « search » : l'app ne les montre
+  // qu'aux personnes qui suivent ce sujet, jamais à tout le monde.
+  const lists = await Promise.all([
+    ...SOURCES.map(fetchSource),
+    ...extra.map((e) => fetchSource(e).then((l) => l.map((x) => ({ ...x, search: true })))),
+  ]);
   // On alterne les sources pour qu'aucune ne monopolise le plafond.
   const merged = [];
   for (let i = 0; i < PER_SOURCE; i++) for (const l of lists) if (l[i]) merged.push(l[i]);

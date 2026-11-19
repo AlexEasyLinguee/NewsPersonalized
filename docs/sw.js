@@ -2,7 +2,7 @@
 // - L'app et l'édition : réseau d'abord (toujours la dernière version), copie de secours pour le hors-ligne.
 // - Les photos : gardées en cache pour être visibles sans réseau.
 
-const SHELL = 'clair-shell-v4';
+const SHELL = 'clair-shell-v5';
 const IMG = 'clair-img-v1';
 const SHELL_FILES = ['./', 'index.html', 'app.js', 'player.js', 'select.js', 'i18n.js', 'config.js', 'manifest.webmanifest', 'icon-180.png', 'icon-512.png'];
 const MAX_IMAGES = 250;

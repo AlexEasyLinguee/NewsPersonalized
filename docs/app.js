@@ -51,6 +51,44 @@ const topicLabel = (id) => (id === 'monde' ? t('topic_world') : catLabel(id));
 // Titre et résumé : version d'origine si demandé, sinon dans la langue de l'app
 // (repli sur le français pour les anciennes éditions).
 const nrm = (x) => String(x || '').toLowerCase().replace(/[^a-z0-9à-ÿ]+/g, ' ').trim();
+// Lien vers l'article : traduit par Google Traduction quand il n'est pas dans la langue du lecteur.
+function readUrl(item) {
+  const url = safeUrl(item.url);
+  const from = item.orig_lang;
+  if (url === '#' || !from || from === settings.lang) return url;
+  if (settings.articleLang === 'original' && (from === 'fr' || from === 'en')) return url; // bilingue : version d'origine
+  return `https://translate.google.com/translate?sl=${encodeURIComponent(from)}&tl=${settings.lang}&u=${encodeURIComponent(url)}`;
+}
+// Langue dans laquelle l'article doit être lu (null = tel quel).
+function readFrom(item) {
+  const from = item?.orig_lang;
+  if (!from || from === settings.lang) return null;
+  if (settings.articleLang === 'original' && (from === 'fr' || from === 'en')) return null;
+  return from;
+}
+
+// Noms du profil (lieux, sujets) traduits dans la langue du lecteur, demandés une fois au serveur.
+const PL = (x) => (settings.tr?.[settings.lang]?.[x]) || x; // nom du profil traduit
+let labelsPending = false;
+async function ensureLabels(names, rerender) {
+  const known = settings.tr?.[settings.lang] || {};
+  const missing = [...new Set(names.filter(Boolean))].filter((x) => !(x in known));
+  if (!missing.length || labelsPending || !WORKER_URL || !navigator.onLine) return;
+  labelsPending = true;
+  try {
+    const res = await fetch(`${PUSH_BASE}/labels`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items: missing.slice(0, 40), lang: settings.lang }), signal: AbortSignal.timeout(20000) });
+    if (!res.ok) return;
+    const { labels = {} } = await res.json();
+    const lang = settings.lang;
+    const map = { ...(settings.tr?.[lang] || {}) };
+    for (const x of missing.slice(0, 40)) map[x] = labels[x] || x;
+    settings.tr = { ...(settings.tr || {}), [lang]: map };
+    store.set('settings', settings);
+    rerender?.();
+  } catch { /* plus tard */ } finally { labelsPending = false; }
+}
+const profileNames = (o) => [...(o.places || []), ...['interests', 'keep_informed', 'avoid'].flatMap((k) => (o[k] || []).map((g) => g.label))];
+
 function tx(item, f) {
   // Version originale seulement si elle est en français ou en anglais ; sinon, la traduction.
   const origReadable = !item.orig_lang || item.orig_lang === 'fr' || item.orig_lang === 'en';
@@ -401,14 +439,14 @@ function chipFor(item) {
 function reasonText(item) {
   const f = followedReason(item, settings);
   if (f && !(f.kind === 'topic' && f.name === 'monde')) {
-    if (f.kind === 'place') return t('r_place', f.name);
-    if (f.kind === 'keep') return t('r_keep', f.name);
+    if (f.kind === 'place') return t('r_place', PL(f.name));
+    if (f.kind === 'keep') return t('r_keep', PL(f.name));
     return t('r_topic', topicLabel(f.name));
   }
   return item.importance >= 8 && item.tone !== 'positive' ? t('info_major') : catLabel(item.category);
 }
 function essCard(item) {
-  return `<a class="card" href="${esc(safeUrl(item.url))}" target="_blank" rel="noopener">
+  return `<a class="card" href="${esc(readUrl(item))}" target="_blank" rel="noopener">
     <div class="chips">${chipFor(item)}<span class="reason">${esc(reasonText(item))}</span></div>
     <h2>${esc(tx(item, 'title'))}</h2>
     <p>${esc(tx(item, 'summary'))}</p>
@@ -450,11 +488,11 @@ function slide(item, i) {
     <div class="media">${img}</div>
     <div class="slide-body">
       ${item.shared ? `<span class="why">${esc(t('shared_by', item.shared.from))}</span>${item.shared.note ? `<p class="shared-note">« ${esc(item.shared.note)} »</p>` : ''}`
-        : item.prio ? `<span class="why prio">${esc(t('why_prio', item.why))}</span>`
-        : item.why ? `<span class="why">${esc(t('why', item.why))}</span>` : ''}
+        : item.prio ? `<span class="why prio">${esc(t('why_prio', PL(item.why)))}</span>`
+        : item.why ? `<span class="why">${esc(t('why', PL(item.why)))}</span>` : ''}
       <h2>${esc(tx(item, 'title'))}</h2>
       <p>${esc(tx(item, 'summary'))}</p>
-      <p class="meta">${esc(item.source)} · ${esc(ago(item.published))} · <a href="${esc(safeUrl(item.url))}" target="_blank" rel="noopener">${esc(t('read_article'))}</a>${hasArticle(item.url) ? ` · <a href="#" data-reader="${esc(safeUrl(item.url))}">${esc(t('read_here'))}</a>` : ''}</p>
+      <p class="meta">${esc(item.source)} · ${esc(ago(item.published))} · <a href="${esc(readUrl(item))}" target="_blank" rel="noopener">${esc(t('read_article'))}</a>${hasArticle(item.url) ? ` · <a href="#" data-reader="${esc(safeUrl(item.url))}">${esc(t('read_here'))}</a>` : ''}</p>
       <div class="actions">
         <button type="button" class="icon-btn${fav ? ' on' : ''}" data-act="fav" data-i="${i}" aria-label="${esc(t('a_save'))}" aria-pressed="${fav}">${ICONS.heart}</button>
         <button type="button" class="icon-btn" data-act="send" data-i="${i}" aria-label="${esc(t('a_send'))}">${ICONS.send}</button>
@@ -564,7 +602,7 @@ feedEl.addEventListener('click', async (e) => {
 function renderFavs() {
   $('#fav-list').innerHTML = favs.length
     ? favs.map((f, i) => `<div class="card fav-card">
-        <a class="fav-link" href="${esc(safeUrl(f.url))}" target="_blank" rel="noopener">
+        <a class="fav-link" href="${esc(readUrl(f))}" target="_blank" rel="noopener">
           <div class="chips"><span class="chip good">${esc(f.category ? catLabel(f.category) : t('fav_tag'))}</span><span class="reason">${esc(f.source)}</span></div>
           <h2>${esc(tx(f, 'title'))}</h2><p>${esc(tx(f, 'summary'))}</p>
         </a>
@@ -610,7 +648,7 @@ function groupTags(key, title) {
   const groups = settings[key] || [];
   if (!groups.length) return '';
   return `<p class="small" style="margin:8px 0 6px;font-weight:700">${esc(title)}</p>
-    <div class="tags">${groups.map((g, k) => `<span class="tag${g.priority ? ' prio' : ''}">${key !== 'avoid' ? `<button type="button" class="star" data-prio="${key}:${k}" aria-pressed="${!!g.priority}" aria-label="${esc(t('prio_aria', g.label))}">${g.priority ? '★' : '☆'}</button>` : ''}${esc(g.label)}<button type="button" data-rm-group="${key}:${k}" aria-label="${esc(t('remove', g.label))}">×</button></span>`).join('')}</div>`;
+    <div class="tags">${groups.map((g, k) => `<span class="tag${g.priority ? ' prio' : ''}">${key !== 'avoid' ? `<button type="button" class="star" data-prio="${key}:${k}" aria-pressed="${!!g.priority}" aria-label="${esc(t('prio_aria', g.label))}">${g.priority ? '★' : '☆'}</button>` : ''}${esc(PL(g.label))}<button type="button" data-rm-group="${key}:${k}" aria-label="${esc(t('remove', PL(g.label)))}">×</button></span>`).join('')}</div>`;
 }
 let topicKind = 'keep_informed';
 async function addTopic(text) {
@@ -632,6 +670,7 @@ async function addTopic(text) {
   return group;
 }
 function renderSettings() {
+  ensureLabels(profileNames(settings), renderSettings);
   const lvl = levelOf(settings.level);
   $('#settings').innerHTML = `
     <h1>${esc(t('set_title'))}</h1>
@@ -675,7 +714,7 @@ function renderSettings() {
     <section>
       <h2>${esc(t('g_places'))}</h2>
       <p class="hint">${esc(t('places_hint'))}</p>
-      <div class="tags">${settings.places.map((p, k) => `<span class="tag">${esc(p)}<button type="button" data-rm-place="${k}" aria-label="${esc(t('remove', p))}">×</button></span>`).join('')}</div>
+      <div class="tags">${settings.places.map((p, k) => `<span class="tag">${esc(PL(p))}<button type="button" data-rm-place="${k}" aria-label="${esc(t('remove', PL(p)))}">×</button></span>`).join('')}</div>
       <form class="add-row" id="add-place">
         <label class="hidden" for="place-input">${esc(t('add_place_label'))}</label>
         <input id="place-input" placeholder="${esc(t('add_place_ph'))}" autocomplete="off">
@@ -808,8 +847,9 @@ function renderProfileForm(error = '') {
 }
 
 function renderDraft() {
+  ensureLabels(profileNames(draft), () => { if (draft) renderDraft(); });
   const g = (key, title) => (draft[key] || []).length
-    ? `<p class="small" style="margin:14px 0 6px;font-weight:700">${esc(title)}</p><div class="tags">${draft[key].map((x, k) => `<span class="tag">${esc(x.label ?? x)}<button type="button" data-rm-draft="${key}:${k}" aria-label="${esc(t('remove', x.label ?? x))}">×</button></span>`).join('')}</div>`
+    ? `<p class="small" style="margin:14px 0 6px;font-weight:700">${esc(title)}</p><div class="tags">${draft[key].map((x, k) => `<span class="tag">${esc(PL(x.label ?? x))}<button type="button" data-rm-draft="${key}:${k}" aria-label="${esc(t('remove', PL(x.label ?? x)))}">×</button></span>`).join('')}</div>`
     : '';
   const lvl = levelOf(draft.level);
   $('#profil-body').innerHTML = `
@@ -930,7 +970,7 @@ async function addFriend(code) {
 }
 function sharedCard(x) {
   const it = x.item || {};
-  return `<a class="card${seenShares.includes(x.id) ? '' : ' unread'}" href="${esc(safeUrl(it.url))}" target="_blank" rel="noopener" data-share="${esc(x.id)}">
+  return `<a class="card${seenShares.includes(x.id) ? '' : ' unread'}" href="${esc(readUrl(it))}" target="_blank" rel="noopener" data-share="${esc(x.id)}">
     <div class="chips"><span class="chip good">${esc(t('from_friend', x.from))}</span><span class="reason">${esc(ago(x.at))}</span></div>
     ${x.note ? `<p class="shared-note dark">« ${esc(x.note)} »</p>` : ''}
     <h2>${esc(tx(it, 'title'))}</h2><p>${esc(tx(it, 'summary') || '')}</p>
@@ -1110,7 +1150,13 @@ function offlineSection() {
 }
 
 /* ---------- Articles complets, lisibles hors ligne ---------- */
-const ART_CACHE = 'clair-articles-v1';
+// v2 : les articles dans une autre langue que celle du lecteur sont désormais gardés traduits.
+const ART_CACHE = 'clair-articles-v2';
+if (store.get('artCacheV', '') !== ART_CACHE) {
+  store.set('artIndex', []);
+  store.set('artCacheV', ART_CACHE);
+  try { caches.delete('clair-articles-v1'); } catch { /* */ }
+}
 const artKey = (url) => `https://clair.invalid/article?u=${encodeURIComponent(url)}`;
 let artIndex = store.get('artIndex', []);   // adresses des articles gardés, du plus récent au plus ancien
 let artFailed = new Set();                  // indisponibles (pour ne pas réessayer en boucle)
@@ -1123,7 +1169,7 @@ async function saveArticle(item) {
   if (!item?.url || hasArticle(item.url)) return true;
   if (!WORKER_URL || !('caches' in window) || artFailed.has(item.url)) return false;
   try {
-    const res = await fetch(`${PUSH_BASE}/read`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: item.url }), signal: AbortSignal.timeout(25000) });
+    const res = await fetch(`${PUSH_BASE}/read`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: item.url, lang: settings.lang, from: readFrom(item) }), signal: AbortSignal.timeout(40000) });
     if (!res.ok) { if (res.status === 422 || res.status === 403) artFailed.add(item.url); return false; }
     const data = await res.json();
     if (!Array.isArray(data.blocks) || !data.blocks.length) return false;

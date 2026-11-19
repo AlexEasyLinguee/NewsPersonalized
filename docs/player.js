@@ -125,8 +125,9 @@ export function initPlayer(ctx) {
     const intro = a ? [{ file: a.f }] : [];
     if (!full()) return intro;
     const ol = entry.item.orig_lang;
-    if (ol && ol !== 'fr' && ol !== 'en') return intro; // pas de voix pour cette langue : le résumé suffit
     const art = await ctx.getArticle(entry.item).catch(() => null);
+    // Pas de voix pour une langue autre que français ou anglais : seulement si l'article a été traduit.
+    if (ol && ol !== 'fr' && ol !== 'en' && !art?.translated) return intro;
     if (!art?.blocks?.length) return intro.length ? intro : [];
     const body = chunks(art.blocks);
     const lang = guessLang(body.join(' '));

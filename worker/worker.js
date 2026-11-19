@@ -99,6 +99,32 @@ function cleanProfile(p) {
   };
 }
 
+/* ---------- Traduction ---------- */
+async function sha(text) {
+  const d = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return [...new Uint8Array(d)].slice(0, 12).map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+async function gemini(env, system, user, timeout) {
+  const model = await pickModel(env);
+  const res = await fetch(`${GEMINI}/openai/chat/completions`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${env.GEMINI_API_KEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model, temperature: 0.2, response_format: { type: 'json_object' }, messages: [{ role: 'system', content: system }, { role: 'user', content: user }] }),
+    signal: AbortSignal.timeout(timeout),
+  });
+  if (!res.ok) throw new Error(`Gemini HTTP ${res.status}`);
+  const content = (await res.json()).choices?.[0]?.message?.content || '{}';
+  return JSON.parse(content.replace(/^```(json)?|```$/g, '').trim());
+}
+// Traduit le titre et les paragraphes d'un article, en gardant leur ordre et leur nombre.
+async function translateArticle(env, art, to) {
+  const lang = to === 'en' ? 'anglais' : 'français';
+  const src = { title: art.title || '', blocks: art.blocks.map((b) => b.text) };
+  const out = await gemini(env, `Traduis fidèlement cet article de presse en ${lang} naturel. Garde exactement le même nombre d'éléments dans "blocks", dans le même ordre, sans résumer ni ajouter. Réponds uniquement en JSON : {"title": "...", "blocks": ["...", "..."]}.`, JSON.stringify(src), 25000);
+  if (!Array.isArray(out.blocks) || out.blocks.length !== art.blocks.length) throw new Error('traduction incomplète');
+  return { title: String(out.title || art.title), blocks: art.blocks.map((b, k) => ({ ...b, text: String(out.blocks[k] || b.text) })) };
+}
+
 /* ---------- Notifications ---------- */
 async function getVapid(env) {
   let vapid = await env.CLAIR.get('vapid', 'json');
@@ -118,7 +144,7 @@ const PUSH_TEXT = {
 };
 function morningMessage(edition, lang) {
   const tx = PUSH_TEXT[lang] || PUSH_TEXT.fr;
-  const top = (edition.items || []).filter((i) => i.tone === 'positive' && !i.fait_divers).sort((a, b) => b.importance - a.importance)[0];
+  const top = (edition.items || []).filter((i) => i.tone === 'positive' && !i.fait_divers && !i.search).sort((a, b) => b.importance - a.importance)[0];
   const headline = top ? (lang === 'en' && top.title_en) || top.title : '';
   return { title: tx.title, body: headline ? tx.lead + headline : tx.fallback, url: APP_URL };
 }
@@ -395,7 +421,36 @@ export default {
       let body = {};
       try { body = await request.json(); } catch { /* corps invalide */ }
       const [status, data] = await handleRead(body, { editionUrl: EDITION_URL });
+      // Article dans une autre langue que celle du lecteur : traduit (et gardé 3 jours pour les suivants).
+      const to = body.lang === 'en' ? 'en' : body.lang === 'fr' ? 'fr' : null;
+      const from = /^[a-z]{2}$/.test(String(body.from || '')) ? String(body.from) : null;
+      if (status === 200 && to && from && from !== to && env.GEMINI_API_KEY) {
+        const key = `tr:${to}:${await sha(data.url)}`;
+        const cached = env.CLAIR && (await env.CLAIR.get(key, 'json'));
+        if (cached) return json({ ...data, ...cached, translated: from }, 200, origin);
+        try {
+          const tr = await translateArticle(env, data, to);
+          if (env.CLAIR) await env.CLAIR.put(key, JSON.stringify(tr), { expirationTtl: 3 * 86400 });
+          return json({ ...data, ...tr, translated: from }, 200, origin);
+        } catch { /* on rend l'original */ }
+      }
       return json(data, status, origin);
+    }
+    if (path === '/labels') {
+      // Traduit les noms courts du profil (lieux, sujets) dans la langue du lecteur.
+      let body = {};
+      try { body = await request.json(); } catch { /* corps invalide */ }
+      const to = body.lang === 'en' ? 'en' : 'fr';
+      const items = list(body.items).map((x) => String(x).slice(0, 60)).filter(Boolean).slice(0, 40);
+      if (!items.length) return json({ labels: {} }, 200, origin);
+      try {
+        const out = await gemini(env, `Traduis chaque nom court (lieu, pays, ville, sujet d'intérêt) en ${to === 'en' ? 'anglais' : 'français'}, avec le nom usuel dans cette langue (ex. « Angleterre » → « England », « Singapour » → « Singapore »). Garde tel quel ce qui est déjà dans cette langue ou ne se traduit pas. Réponds uniquement en JSON : {"labels": {"original": "traduction"}}.`, JSON.stringify(items), 15000);
+        const labels = {};
+        for (const k of items) { const v = out?.labels?.[k]; if (typeof v === 'string' && v.trim()) labels[k] = v.trim().slice(0, 60); }
+        return json({ labels }, 200, origin);
+      } catch (e) {
+        return json({ error: String(e.message || e).slice(0, 200) }, 502, origin);
+      }
     }
     if (/^\/(me|friends)\/|^\/(share|inbox)$/.test(path)) {
       if (!env.CLAIR) return json({ error: 'Stockage non configuré.' }, 503, origin);
