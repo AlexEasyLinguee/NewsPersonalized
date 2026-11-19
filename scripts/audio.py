@@ -12,6 +12,16 @@ import subprocess
 import sys
 import time
 
+def _ffmpeg():
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        return 'ffmpeg'
+
+
+FFMPEG = _ffmpeg()
+
 from kokoro_onnx import Kokoro
 
 LANG, EDITION, OUT = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -76,7 +86,7 @@ def main():
     def record(text, name):
         samples, sr = k.create(text, voice=voice, speed=1.0, lang=lang)
         path = os.path.join(OUT, LANG, f'{name}.mp3')
-        proc = subprocess.run(['ffmpeg', '-loglevel', 'error', '-y', '-f', 'f32le', '-ar', str(sr), '-ac', '1', '-i', '-',
+        proc = subprocess.run([FFMPEG, '-loglevel', 'error', '-y', '-f', 'f32le', '-ar', str(sr), '-ac', '1', '-i', '-',
                                '-ac', '1', '-b:a', '48k', path], input=samples.astype('float32').tobytes())
         if proc.returncode != 0:
             raise RuntimeError('ffmpeg')

@@ -113,8 +113,8 @@ jobs:
           python-version: '3.12'
       - name: Installer la voix Kokoro
         run: |
-          pip install --quiet kokoro-onnx soundfile
-          sudo apt-get install -y -qq ffmpeg > /dev/null
+          # ffmpeg vient de pip (binaire autonome) : plus de dépendance aux serveurs Ubuntu, parfois indisponibles.
+          for i in 1 2 3; do pip install --quiet kokoro-onnx soundfile imageio-ffmpeg && break; sleep 15; done
       - uses: actions/cache@v4
         with:
           path: kokoro
