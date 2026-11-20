@@ -39,6 +39,9 @@ let sel = { essentiel: [], fil: [] };
 let me = store.get('me', null);            // { token, code, name } : identité pour les amis
 let friends = store.get('friends', []);    // [{ code, name }]
 let inbox = store.get('inbox', []);        // articles reçus de tes amis
+let friendLikes = store.get('friendLikes', []); // articles aimés par tes amis (7 jours)
+const likedBy = (url) => friendLikes.find((x) => x.item?.url === url)?.names || [];
+const namesText = (names) => (names.length > 2 ? t('liked_many', names[0], names.length - 1) : names.join(t('and')));
 let seenShares = store.get('seenShares', []);
 
 const $ = (q) => document.querySelector(q);
@@ -423,7 +426,7 @@ function show(tab) {
   if (tab === 'reglages') renderSettings();
   if (tab === 'profil') renderProfileForm();
   if (tab === 'favoris') renderFavs();
-  if (tab === 'amis') { renderAmis(); refreshInbox(); }
+  if (tab === 'amis') { renderAmis(); refreshInbox(); refreshLikes(); }
   if (tab === 'fil') updateProgress();
   window.scrollTo(0, 0);
 }
@@ -455,6 +458,7 @@ function essCard(item, i) {
       </span>
     </div>
     <h2>${esc(tx(item, 'title'))}</h2>
+    ${likedBy(item.url).length ? `<span class="liked">${ICONS.heart}${esc(t('liked_by', namesText(likedBy(item.url))))}</span>` : ''}
     <p>${esc(tx(item, 'summary'))}</p>
     ${readerChip(item)}
   </a>`;
@@ -497,6 +501,7 @@ function slide(item, i) {
         : item.prio ? `<span class="why prio">${esc(t('why_prio', PL(item.why)))}</span>`
         : item.why ? `<span class="why">${esc(t('why', PL(item.why)))}</span>` : ''}
       <h2>${esc(tx(item, 'title'))}</h2>
+      ${likedBy(item.url).length ? `<span class="liked">${ICONS.heart}${esc(t('liked_by', namesText(likedBy(item.url))))}</span>` : ''}
       <p>${esc(tx(item, 'summary'))}</p>
       <p class="meta">${esc(item.source)} · ${esc(ago(item.published))} · <a href="${esc(readUrl(item))}" target="_blank" rel="noopener">${esc(t('read_article'))}</a>${hasArticle(item.url) ? ` · <a href="#" data-reader="${esc(safeUrl(item.url))}">${esc(t('read_here'))}</a>` : ''}</p>
       <div class="actions">
@@ -581,6 +586,7 @@ function toggleFav(item, btn) {
   store.set('favs', favs);
   const on = isFav(item.url);
   if (on) saveArticle(item); // texte complet gardé pour le hors-ligne
+  if (settings.shareLikes && me?.token) api('/likes/set', { token: me.token, item: shareable(item), on }).catch(() => {});
   btn.classList.toggle('on', on);
   btn.setAttribute('aria-pressed', String(on));
   toast(on ? t('toast_fav_on') : t('toast_fav_off'));
@@ -653,6 +659,7 @@ $('#fav-list').addEventListener('click', async (e) => {
     favs = favs.filter((_, k) => k !== Number(b.dataset.favRemove));
     if (removed && !currentItems().some((i) => i.url === removed.url)) deleteArticles([removed.url]);
     store.set('favs', favs);
+    if (removed && settings.shareLikes && me?.token) api('/likes/set', { token: me.token, item: shareable(removed), on: false }).catch(() => {});
     renderFavs();
     renderFeed();
     toast(t('toast_fav_off'));
@@ -990,6 +997,42 @@ async function addFriend(code) {
     return false;
   }
 }
+// Ce qu'on envoie au serveur d'un article (pas les champs internes de l'app).
+const shareable = (i) => ({ title: i.title, summary: i.summary, title_en: i.title_en, summary_en: i.summary_en, orig_title: i.orig_title, orig_summary: i.orig_summary, orig_lang: i.orig_lang, url: i.url, image: i.image, source: i.source, category: i.category, published: i.published });
+async function refreshLikes() {
+  if (!me || !WORKER_URL) return;
+  try {
+    const { items } = await api('/friends/likes', { token: me.token });
+    const changed = JSON.stringify(items) !== JSON.stringify(friendLikes);
+    friendLikes = items || [];
+    store.set('friendLikes', friendLikes);
+    if (!changed) return;
+    if ($('#amis').classList.contains('active')) renderAmis();
+    else if (edition) { renderEssentiel(); if (!$('#fil').classList.contains('active')) renderFeed(); }
+  } catch { /* hors ligne */ }
+}
+async function setShareLikes(on) {
+  settings.shareLikes = on;
+  saveSettings();
+  try {
+    if (on) {
+      const week = Date.now() - 7 * 864e5;
+      const items = favs.filter((f) => Date.parse(f.savedAt) > week).slice(0, 30).map((f) => ({ item: shareable(f), at: f.savedAt }));
+      await api('/likes/sync', { token: me.token, items });
+      toast(t('likes_on'));
+    } else {
+      await api('/likes/clear', { token: me.token });
+      toast(t('likes_off'));
+    }
+  } catch { toast(t('friends_error')); }
+}
+function likedCard(x) {
+  const it = x.item || {};
+  return `<a class="card" href="${esc(readUrl(it))}" target="_blank" rel="noopener">
+    <div class="chips"><span class="chip liked-chip">${ICONS.heart}${esc(t('liked_by', namesText(x.names)))}</span><span class="reason">${esc(ago(x.at))}</span></div>
+    <h2>${esc(tx(it, 'title'))}</h2><p>${esc(tx(it, 'summary') || '')}</p>
+  </a>`;
+}
 function sharedCard(x) {
   const it = x.item || {};
   return `<a class="card${seenShares.includes(x.id) ? '' : ' unread'}" href="${esc(readUrl(it))}" target="_blank" rel="noopener" data-share="${esc(x.id)}">
@@ -1033,6 +1076,14 @@ function renderAmis() {
         <button type="submit">${esc(t('add'))}</button>
       </form>
     </section>
+    <section style="margin-top:22px" id="likes">
+      <h2>${esc(t('liked_title'))}</h2>
+      <div class="list" style="padding:0">${friendLikes.map(likedCard).join('') || `<div class="empty" style="margin:0">${esc(t('liked_empty'))}</div>`}</div>
+      <div class="count-row" style="padding:12px 0 0;border:0">
+        <div><div style="font-weight:700">${esc(t('likes_share'))}</div><div class="small">${esc(t('likes_share_sub'))}</div></div>
+        <button type="button" class="toggle" data-share-likes aria-pressed="${!!settings.shareLikes}">${esc(settings.shareLikes ? t('eve_on') : t('eve_off'))}</button>
+      </div>
+    </section>
     <section style="margin-top:22px" id="recus">
       <h2>${esc(t('received'))}</h2>
       <div class="list" style="padding:0">${shared.map(sharedCard).join('') || `<div class="empty" style="margin:0">${esc(t('no_received'))}</div>`}</div>
@@ -1062,6 +1113,7 @@ $('#amis-body').addEventListener('click', async (e) => {
   if (card) markShareSeen(card.dataset.share);
   const b = e.target.closest('button');
   if (!b) return;
+  if (b.hasAttribute('data-share-likes')) { await setShareLikes(!settings.shareLikes); return renderAmis(); }
   if (b.hasAttribute('data-invite')) {
     const text = t('invite_text', me.code);
     if (navigator.share) { try { await navigator.share({ title: 'Clair', text, url: inviteUrl() }); } catch { /* annulé */ } }
@@ -1381,7 +1433,7 @@ async function load() {
 applyLanguage();
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 $('#ess-sub').textContent = t('loading');
-load().then(refreshInbox);
+load().then(refreshInbox).then(refreshLikes);
 // Une fois par jour : l'app a été ouverte, donc le rappel du soir n'est pas ignoré.
 if (store.get('seenDay', '') !== dayKey()) { store.set('seenDay', dayKey()); setTimeout(() => syncProgress({}), 3000); }
 setTimeout(() => syncPushLang(false), 3500); // fuseau horaire ou réglages changés depuis le dernier envoi

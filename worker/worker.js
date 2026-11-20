@@ -452,7 +452,7 @@ export default {
         return json({ error: String(e.message || e).slice(0, 200) }, 502, origin);
       }
     }
-    if (/^\/(me|friends)\/|^\/(share|inbox)$/.test(path)) {
+    if (/^\/(me|friends|likes)\/|^\/(share|inbox)$/.test(path)) {
       if (!env.CLAIR) return json({ error: 'Stockage non configuré.' }, 503, origin);
       let body = {};
       try { body = await request.json(); } catch { /* corps invalide */ }
