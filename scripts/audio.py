@@ -1,5 +1,10 @@
-"""Journal audio de Clair : enregistre chaque matin la version « radio » des articles
-avec la voix de synthèse Kokoro (open source, gratuite), dans une langue.
+"""Journal audio de Clair : enregistre chaque matin la version « radio » des articles, dans une langue.
+
+Voix : Phonon (Gradium, modèles ouverts, gratuits).
+  - anglais : Phonon 31m, licence Apache 2.0 (usage commercial permis), téléchargement libre ;
+  - français : Phonon 40m, licence CC BY-NC (non commercial), modèle « gated » : il faut accepter
+    ses conditions sur Hugging Face et fournir HF_TOKEN.
+Si Phonon ne peut pas être chargé (pas de jeton, Hugging Face indisponible…), on revient à Kokoro.
 
 Usage : python3 scripts/audio.py fr|en docs/edition.json docs/audio
 Écrit docs/audio/<langue>/<id>.mp3 et le sommaire docs/audio/<langue>.json.
@@ -22,15 +27,35 @@ def _ffmpeg():
 
 FFMPEG = _ffmpeg()
 
-from kokoro_onnx import Kokoro
-
 LANG, EDITION, OUT = sys.argv[1], sys.argv[2], sys.argv[3]
 MODEL_DIR = os.environ.get('KOKORO_DIR', 'kokoro')
 MAX_ITEMS = int(os.environ.get('AUDIO_MAX', '90'))
 MAX_MINUTES = float(os.environ.get('AUDIO_MAX_MINUTES', '45'))  # garde-fou de durée de calcul
 SAMPLE = os.environ.get('AUDIO_SAMPLE')  # pour un test rapide : n'enregistre que N articles
 
-VOICE = {'fr': ('ff_siwis', 'fr-fr'), 'en': ('bf_emma', 'en-gb')}[LANG]
+KOKORO_VOICE = {'fr': ('ff_siwis', 'fr-fr'), 'en': ('bf_emma', 'en-gb')}[LANG]
+PHONON_MODEL = os.environ.get(f'PHONON_MODEL_{LANG.upper()}') or {'fr': 'hf://gradium/phonon-40m-fr', 'en': 'hf://gradium/phonon-31m-en'}[LANG]
+PHONON_VOICE = os.environ.get(f'PHONON_VOICE_{LANG.upper()}') or None  # vide : voix par défaut du modèle
+ENGINE = os.environ.get('AUDIO_ENGINE', 'phonon')  # « kokoro » pour forcer l'ancienne voix
+
+
+def load_voice():
+    """Renvoie (nom, fonction texte -> (échantillons float32, fréquence))."""
+    if ENGINE == 'phonon':
+        try:
+            import ptts
+            tts = ptts.TTS(PHONON_MODEL, lang=LANG, quant='q8', voice=PHONON_VOICE)
+            sr = tts.sample_rate
+            name = f"phonon:{PHONON_MODEL.split('/')[-1]}:{PHONON_VOICE or 'default'}"
+            print(f'Voix : {name}')
+            return name, lambda text: (tts.synth(text), sr)
+        except Exception as e:  # pas de jeton, modèle indisponible… : on garde un journal audio quand même
+            print(f'Phonon indisponible ({type(e).__name__}: {str(e)[:300]}) : retour à Kokoro.')
+    from kokoro_onnx import Kokoro
+    k = Kokoro(os.path.join(MODEL_DIR, 'kokoro.onnx'), os.path.join(MODEL_DIR, 'voices.bin'))
+    voice, lang = KOKORO_VOICE
+    print(f'Voix : kokoro:{voice}')
+    return f'kokoro:{voice}', lambda text: k.create(text, voice=voice, speed=1.0, lang=lang)
 DAYS = {'fr': ['lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi', 'dimanche'],
         'en': ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']}[LANG]
 MONTHS = {'fr': ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre'],
@@ -79,12 +104,11 @@ def main():
     if SAMPLE:
         items = items[:int(SAMPLE)]
     os.makedirs(os.path.join(OUT, LANG), exist_ok=True)
-    k = Kokoro(os.path.join(MODEL_DIR, 'kokoro.onnx'), os.path.join(MODEL_DIR, 'voices.bin'))
-    voice, lang = VOICE
+    voice, speak = load_voice()
     start = time.time()
 
     def record(text, name):
-        samples, sr = k.create(text, voice=voice, speed=1.0, lang=lang)
+        samples, sr = speak(text)
         path = os.path.join(OUT, LANG, f'{name}.mp3')
         proc = subprocess.run([FFMPEG, '-loglevel', 'error', '-y', '-f', 'f32le', '-ar', str(sr), '-ac', '1', '-i', '-',
                                '-ac', '1', '-b:a', '48k', path], input=samples.astype('float32').tobytes())
