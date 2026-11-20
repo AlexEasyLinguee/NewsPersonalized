@@ -445,9 +445,15 @@ function reasonText(item) {
   }
   return item.importance >= 8 && item.tone !== 'positive' ? t('info_major') : catLabel(item.category);
 }
-function essCard(item) {
+function essCard(item, i) {
+  const fav = isFav(item.url);
   return `<a class="card" href="${esc(readUrl(item))}" target="_blank" rel="noopener">
-    <div class="chips">${chipFor(item)}<span class="reason">${esc(reasonText(item))}</span></div>
+    <div class="chips">${chipFor(item)}<span class="reason">${esc(reasonText(item))}</span>
+      <span class="ess-acts">
+        <span role="button" tabindex="0" class="ess-act" data-ess-send="${i}" aria-label="${esc(t('a_send'))}">${ICONS.send}</span>
+        <span role="button" tabindex="0" class="ess-act${fav ? ' on' : ''}" data-ess-fav="${i}" aria-label="${esc(t('a_save'))}" aria-pressed="${fav}">${ICONS.heart}</span>
+      </span>
+    </div>
     <h2>${esc(tx(item, 'title'))}</h2>
     <p>${esc(tx(item, 'summary'))}</p>
     ${readerChip(item)}
@@ -463,7 +469,7 @@ function renderEssentiel() {
   $('#ess-later').innerHTML = laterBlock();
   $('#ess-stale').innerHTML = !navigator.onLine ? `<div class="stale offline">${esc(t('offline_banner', date.toLowerCase()))}</div>`
     : ageH > 30 ? `<div class="stale">${esc(t('stale'))}</div>` : '';
-  $('#ess-list').innerHTML = sel.essentiel.map(essCard).join('') || `<div class="empty">${esc(t('ess_empty'))}</div>`;
+  $('#ess-list').innerHTML = sel.essentiel.map((it, i) => essCard(it, i)).join('') || `<div class="empty">${esc(t('ess_empty'))}</div>`;
   $('#go-fil').innerHTML = `${esc(t('go_fil', sel.fil.length))} ${ICONS.arrow}`;
   renderListenButton();
 }
@@ -568,6 +574,29 @@ feedEl.addEventListener('touchend', () => {
   if (forward && touchIdx < sel.fil.length && Date.now() - enteredAt >= 1500) reward(touchIdx, true);
 }, { passive: true });
 
+// Ajoute ou retire un favori (fil ou L'essentiel) et met le bouton à jour.
+function toggleFav(item, btn) {
+  if (isFav(item.url)) favs = favs.filter((f) => f.url !== item.url);
+  else favs = [{ ...item, savedAt: new Date().toISOString() }, ...favs].slice(0, 200);
+  store.set('favs', favs);
+  const on = isFav(item.url);
+  if (on) saveArticle(item); // texte complet gardé pour le hors-ligne
+  btn.classList.toggle('on', on);
+  btn.setAttribute('aria-pressed', String(on));
+  toast(on ? t('toast_fav_on') : t('toast_fav_off'));
+}
+// Boutons Enregistrer / Envoyer des cartes de L'essentiel (dans le lien de la carte : on bloque l'ouverture).
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('[data-ess-fav],[data-ess-send]');
+  if (!b) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const item = sel.essentiel[Number(b.dataset.essFav ?? b.dataset.essSend)];
+  if (!item) return;
+  if (b.dataset.essFav !== undefined) toggleFav(item, b);
+  else openSendSheet(item);
+}, true);
+
 feedEl.addEventListener('click', async (e) => {
   const btn = e.target.closest('button[data-act]');
   if (!btn) return;
@@ -578,14 +607,7 @@ feedEl.addEventListener('click', async (e) => {
   if (!item) return;
   if (act === 'send') return openSendSheet(item);
   if (act === 'fav') {
-    if (isFav(item.url)) favs = favs.filter((f) => f.url !== item.url);
-    else favs = [{ ...item, savedAt: new Date().toISOString() }, ...favs].slice(0, 200);
-    store.set('favs', favs);
-    const on = isFav(item.url);
-    if (on) saveArticle(item); // texte complet gardé pour le hors-ligne
-    btn.classList.toggle('on', on);
-    btn.setAttribute('aria-pressed', String(on));
-    toast(on ? t('toast_fav_on') : t('toast_fav_off'));
+    toggleFav(item, btn);
   } else if (act === 'share') {
     const data = { title: tx(item, 'title'), text: tx(item, 'summary'), url: safeUrl(item.url) };
     if (navigator.share) { try { await navigator.share(data); } catch { /* annulé */ } }
