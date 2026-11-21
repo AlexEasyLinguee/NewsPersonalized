@@ -52,3 +52,14 @@ jobs:
           sed -i "s/__KV_ID__/$ID/" wrangler.toml
       - name: Déployer
         run: npx --yes wrangler@4 deploy
+      - name: Jeton GitHub pour lancer l'édition chaque matin
+        env:
+          GH_DISPATCH_TOKEN: ${{ secrets.GH_DISPATCH_TOKEN }}
+        run: |
+          T=$(printf '%s' "$GH_DISPATCH_TOKEN" | tr -d '[:space:]')
+          if [ -z "$T" ]; then echo "Pas de secret GH_DISPATCH_TOKEN : l'édition reste lancée par GitHub seul."; exit 0; fi
+          echo "::add-mask::$T"
+          CODE=$(curl -sS -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $T" -H "Accept: application/vnd.github+json" https://api.github.com/repos/AlexEasyLinguee/NewsPersonalized/actions/workflows/edition.yml)
+          if [ "$CODE" = "200" ]; then echo "Jeton GitHub : OK (le dépôt est bien visible)"; else echo "::warning::Jeton GitHub refusé (HTTP $CODE) : vérifie le dépôt choisi et le droit « Actions : Read and write »."; fi
+          printf '%s' "$T" | npx --yes wrangler@4 secret put GH_DISPATCH_TOKEN
+          echo "Réveil installé : l'édition sera lancée chaque matin vers 5 h (heure de Paris en hiver)." 

@@ -149,6 +149,30 @@ function morningMessage(edition, lang) {
   return { title: tx.title, body: headline ? tx.lead + headline : tx.fallback, url: APP_URL };
 }
 
+/* ---------- Réveil de l'édition ---------- */
+// GitHub retarde souvent ses tâches programmées de plusieurs heures : c'est le relais, ponctuel,
+// qui lance l'édition chaque matin (jeton GitHub limité au dépôt, droit « Actions » seulement).
+async function kickEdition(env) {
+  if (!env.GH_DISPATCH_TOKEN) return;
+  try {
+    const res = await fetch(`${EDITION_URL}?t=${Date.now()}`, { cf: { cacheTtl: 0 } });
+    const generated = res.ok ? Date.parse((await res.json()).generated_at) : 0;
+    if (generated && Date.now() - generated < 10 * 3600e3) return; // déjà faite ce matin
+  } catch { /* on lance quand même */ }
+  const r = await fetch('https://api.github.com/repos/AlexEasyLinguee/NewsPersonalized/actions/workflows/edition.yml/dispatches', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${env.GH_DISPATCH_TOKEN}`,
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+      'User-Agent': 'clair-relais',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ ref: 'main' }),
+  });
+  console.log(`Édition lancée : HTTP ${r.status}`);
+}
+
 /* ---------- Rappel du soir ---------- */
 const nrm = (x) => ` ${String(x ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()} `;
 // Combien d'histoires du jour touchent chaque sujet prioritaire (mêmes règles que l'app).
@@ -463,8 +487,11 @@ export default {
     return handleProfile(request, env, origin);
   },
   async scheduled(event, env, ctx) {
-    if (!env.CLAIR) return;
-    if (event.cron === '7 * * * *') ctx.waitUntil(notifyEvening(env));
-    else ctx.waitUntil(notifyMorning(env));
+    if (event.cron === '7 * * * *') {
+      // 4 h 07 UTC (5 h 07 à Paris l'hiver) : on lance l'édition du jour ; 5 h 07 : nouvel essai si elle n'est pas sortie.
+      const h = new Date().getUTCHours();
+      if (h === 4 || h === 5) ctx.waitUntil(kickEdition(env));
+      if (env.CLAIR) ctx.waitUntil(notifyEvening(env));
+    } else if (env.CLAIR) ctx.waitUntil(notifyMorning(env));
   },
 };
