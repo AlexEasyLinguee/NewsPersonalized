@@ -1430,6 +1430,33 @@ async function load() {
     $('#go-fil').classList.add('hidden');
   }
 }
+// Nouvelle édition sortie pendant que l'app était ouverte (ou en arrière-plan) : bandeau pour l'afficher.
+let lastEditionCheck = 0;
+async function checkNewEdition() {
+  if (!edition || !navigator.onLine || document.visibilityState !== 'visible') return;
+  if (Date.now() - lastEditionCheck < 60e3) return;
+  lastEditionCheck = Date.now();
+  try {
+    const res = await fetch(`edition.json?t=${Date.now()}`, { cache: 'no-store' });
+    if (!res.ok) return;
+    const next = await res.json();
+    if (!next.generated_at || next.generated_at === edition.generated_at || document.querySelector('.new-edition')) return;
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'new-edition';
+    b.innerHTML = `☀️ ${esc(t('new_edition'))} <strong>${esc(t('new_edition_btn'))}</strong>`;
+    b.addEventListener('click', async () => {
+      b.remove();
+      await load();
+      show('essentiel');
+      window.scrollTo(0, 0);
+    });
+    document.body.appendChild(b);
+  } catch { /* hors ligne */ }
+}
+document.addEventListener('visibilitychange', checkNewEdition);
+setInterval(checkNewEdition, 15 * 60e3);
+
 applyLanguage();
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 $('#ess-sub').textContent = t('loading');

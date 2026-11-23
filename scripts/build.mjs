@@ -143,7 +143,13 @@ Pour chaque article reçu, renvoie un objet avec :
 - "radio_en" : le même texte radio, en anglais naturel.
 Réponds uniquement en JSON : {"items": [ ... ]}.`;
 
-// Choisit automatiquement le meilleur modèle gratuit disponible (Flash-Lite, sinon Flash).
+// Modèles de secours, du préféré au moins préféré : si l'un est surchargé, on passe au suivant.
+let MODELS = [];
+const BUDGET_MS = Number(process.env.AI_BUDGET_MIN || 40) * 60e3; // au-delà, on publie ce qu'on a
+const T0 = Date.now();
+const overBudget = () => Date.now() - T0 > BUDGET_MS;
+
+// Choisit automatiquement les meilleurs modèles gratuits disponibles (Flash-Lite, puis Flash, puis les versions d'avant).
 async function pickModel() {
   if (MODEL || process.env.MOCK_AI) return;
   const res = await fetch(`${GEMINI}/models?pageSize=200`, { headers: { 'x-goog-api-key': TOKEN } });
@@ -155,14 +161,35 @@ async function pickModel() {
   const ver = (n) => parseFloat(n.split('-')[1]);
   const lite = names.filter((n) => n.endsWith('-lite')).sort((a, b) => ver(b) - ver(a));
   const flash = names.filter((n) => !n.endsWith('-lite')).sort((a, b) => ver(b) - ver(a));
-  MODEL = lite[0] || flash[0];
+  MODELS = [lite[0], flash[0], lite[1], flash[1]].filter(Boolean);
+  MODEL = MODELS[0];
   if (!MODEL) throw new Error('Aucun modèle Gemini Flash disponible pour cette clé.');
 }
 
-async function callModel(batch) {
+// Note un lot en essayant les modèles l'un après l'autre. Le premier qui répond devient le préféré.
+async function scoreBatch(batch) {
+  if (process.env.MOCK_AI) return mockScore(batch);
+  const order = MODELS.length ? MODELS : [MODEL];
+  let last;
+  for (const model of order) {
+    try {
+      const res = await callModel(batch, model);
+      if (model !== MODELS[0] && MODELS.length) {
+        console.log(`  → ${model} prend le relais`);
+        MODELS = [model, ...MODELS.filter((m) => m !== model)];
+      }
+      used.add(model);
+      return res;
+    } catch (e) { last = e; }
+  }
+  throw last || new Error('IA indisponible');
+}
+const used = new Set();
+
+async function callModel(batch, model = MODEL) {
   if (process.env.MOCK_AI) return mockScore(batch);
   const body = {
-    model: MODEL,
+    model,
     temperature: 0.2,
     response_format: { type: 'json_object' },
     messages: [
@@ -170,7 +197,7 @@ async function callModel(batch) {
       { role: 'user', content: JSON.stringify(batch.map((b) => ({ id: b.id, source: b.source, title: b.title, desc: b.desc }))) },
     ],
   };
-  for (let attempt = 1; attempt <= 4; attempt++) {
+  for (let attempt = 1; attempt <= 3; attempt++) {
     const res = await fetch(ENDPOINT, {
       method: 'POST',
       headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
@@ -178,8 +205,9 @@ async function callModel(batch) {
       signal: AbortSignal.timeout(90000),
     });
     if (res.status === 429 || res.status >= 500) {
-      const wait = Math.min(90, Number(res.headers.get('retry-after')) || 20 * attempt);
-      console.log(`  IA occupée (${res.status}), nouvel essai dans ${wait}s`);
+      if (attempt === 3) break; // ce modèle est saturé : on essaiera le suivant
+      const wait = Math.min(60, Number(res.headers.get('retry-after')) || 10 * attempt);
+      console.log(`  ${model} occupé (${res.status}), nouvel essai dans ${wait}s`);
       await sleep(wait * 1000);
       continue;
     }
@@ -191,7 +219,7 @@ async function callModel(batch) {
     const json = JSON.parse(content.replace(/^```(json)?|```$/g, '').trim());
     return arr(json.items);
   }
-  throw new Error('IA indisponible après 4 essais');
+  throw new Error(`${model} indisponible`);
 }
 
 // Notation factice, uniquement pour tester l'app sans IA (MOCK_AI=1).
@@ -292,28 +320,36 @@ async function main() {
 
   const byId = new Map(items.map((i) => [i.id, i]));
   const scored = [];
-  let failures = 0;
-  for (let i = 0; i < items.length; i += BATCH) {
-    const batch = items.slice(i, i + BATCH);
-    try {
-      let results;
-      try { results = await callModel(batch); }
-      catch (e) { console.log(`  lot ${i / BATCH + 1} : nouvel essai (${e.message.slice(0, 80)})`); await sleep(PAUSE_MS); results = await callModel(batch); }
-      for (const r of results) {
-        const src = byId.get(Number(r.id));
-        if (src) scored.push(clean(r, src));
+  const batches = [];
+  for (let i = 0; i < items.length; i += BATCH) batches.push({ n: i / BATCH + 1, items: items.slice(i, i + BATCH) });
+  // Deux passages : les lots ratés au premier (IA surchargée) sont repris à la fin, après une pause.
+  let todo = batches;
+  for (let pass = 1; pass <= 2 && todo.length; pass++) {
+    if (pass === 2) { console.log(`\nReprise de ${todo.length} lot(s) en échec dans 60 s…`); await sleep(60000); }
+    const failed = [];
+    for (const b of todo) {
+      if (overBudget()) { failed.push(b); continue; }
+      try {
+        const results = await scoreBatch(b.items);
+        for (const r of results) {
+          const src = byId.get(Number(r.id));
+          if (src) scored.push(clean(r, src));
+        }
+        console.log(`  lot ${b.n}: ${results.length} notés`);
+      } catch (e) {
+        failed.push(b);
+        console.log(`  lot ${b.n} ${pass === 1 ? 'reporté' : 'ignoré'} : ${e.message}`);
       }
-      console.log(`  lot ${i / BATCH + 1}: ${results.length} notés`);
-    } catch (e) {
-      failures++;
-      console.log(`  lot ${i / BATCH + 1} ignoré: ${e.message}`);
+      if (!process.env.MOCK_AI) await sleep(PAUSE_MS);
     }
-    if (!process.env.MOCK_AI) await sleep(PAUSE_MS);
+    todo = failed;
+    if (overBudget() && todo.length) { console.log(`Temps maximum atteint : ${todo.length} lot(s) laissés de côté.`); break; }
   }
+  const failures = todo.length;
   if (!scored.length) throw new Error(`Aucun article noté (${failures} lots en échec).`);
 
   const kept = scored.filter((s) => s.importance > 0 && s.fiable !== false).sort((a, b) => b.importance - a.importance);
-  const edition = { generated_at: new Date().toISOString(), model: MODEL, count: kept.length, items: kept };
+  const edition = { generated_at: new Date().toISOString(), model: [...used].join(', ') || MODEL, count: kept.length, items: kept };
   await fs.mkdir(new URL('docs/', ROOT), { recursive: true });
   await fs.writeFile(new URL('docs/edition.json', ROOT), JSON.stringify(edition));
   console.log(`\nÉdition écrite : ${kept.length} articles (${failures} lots en échec).`);

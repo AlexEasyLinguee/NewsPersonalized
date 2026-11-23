@@ -144,6 +144,7 @@ export const STR = {
     draft_title: 'Voilà ton profil', draft_bad: 'Mauvaises nouvelles :', draft_ok: 'C’est moi, on y va', draft_redo: 'Réécrire mon texte',
     profile_saved: 'Profil enregistré',
     no_edition: 'Pas encore d’édition.',
+    new_edition: 'Nouvelle édition disponible', new_edition_btn: 'Afficher',
     no_edition_p: 'La première édition sera prête après le premier passage de la tâche quotidienne sur GitHub. Reviens dans quelques minutes.',
   },
   en: {
@@ -288,6 +289,7 @@ export const STR = {
     draft_title: 'Here’s your profile', draft_bad: 'Bad news:', draft_ok: 'That’s me, let’s go', draft_redo: 'Rewrite my text',
     profile_saved: 'Profile saved',
     no_edition: 'No edition yet.',
+    new_edition: 'New edition available', new_edition_btn: 'Show',
     no_edition_p: 'The first edition will be ready after the daily job runs on GitHub. Check back in a few minutes.',
   },
 };
