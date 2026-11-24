@@ -59,7 +59,11 @@ jobs:
           T=$(printf '%s' "$GH_DISPATCH_TOKEN" | tr -d '[:space:]')
           if [ -z "$T" ]; then echo "Pas de secret GH_DISPATCH_TOKEN : l'édition reste lancée par GitHub seul."; exit 0; fi
           echo "::add-mask::$T"
-          CODE=$(curl -sS -o /dev/null -w "%{http_code}" -H "Authorization: Bearer $T" -H "Accept: application/vnd.github+json" https://api.github.com/repos/AlexEasyLinguee/NewsPersonalized/actions/workflows/edition.yml)
-          if [ "$CODE" = "200" ]; then echo "Jeton GitHub : OK (le dépôt est bien visible)"; else echo "::warning::Jeton GitHub refusé (HTTP $CODE) : vérifie le dépôt choisi et le droit « Actions : Read and write »."; fi
+          # Test du droit de lancer l'édition, sans rien lancer : une branche qui n'existe pas
+          # répond 422 si le jeton a le droit « Actions : écriture », 403 sinon.
+          CODE=$(curl -sS -o /tmp/r.json -w "%{http_code}" -X POST -H "Authorization: Bearer $T" -H "Accept: application/vnd.github+json" https://api.github.com/repos/AlexEasyLinguee/NewsPersonalized/actions/workflows/edition.yml/dispatches -d '{"ref":"clair-test-droits-inexistante"}')
+          if [ "$CODE" = "422" ]; then echo "Jeton GitHub : OK (il peut lancer l'édition)"; else echo "::warning::Jeton GitHub : il ne peut pas lancer l'édition (HTTP $CODE). Il faut « Actions : Read and write » sur NewsPersonalized."; cat /tmp/r.json; fi
           printf '%s' "$T" | npx --yes wrangler@4 secret put GH_DISPATCH_TOKEN
           echo "Réveil installé : l'édition sera lancée chaque matin vers 5 h (heure de Paris en hiver)." 
+      - name: Dernier réveil du matin
+        run: curl -sS -m 15 https://clair-profil.alexis-lecussan.workers.dev/health || true

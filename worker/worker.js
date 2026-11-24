@@ -170,7 +170,10 @@ async function kickEdition(env) {
     },
     body: JSON.stringify({ ref: 'main' }),
   });
-  console.log(`Édition lancée : HTTP ${r.status}`);
+  const msg = r.status === 204 ? 'ok' : (await r.text()).slice(0, 200);
+  console.log(`Édition lancée : HTTP ${r.status} ${msg}`);
+  // Gardé pour le diagnostic (lu par le workflow « Relais Cloudflare »).
+  if (env.CLAIR) await env.CLAIR.put('kick:last', JSON.stringify({ at: new Date().toISOString(), status: r.status, msg }));
 }
 
 /* ---------- Rappel du soir ---------- */
@@ -416,6 +419,10 @@ export default {
     // Liste des sujets suivis (anonyme), lue par la tâche du matin sur GitHub.
     if (request.method === 'GET' && new URL(request.url).pathname === '/topics' && env.CLAIR) {
       return new Response(JSON.stringify({ topics: await listTopics(env) }), { headers: { 'Content-Type': 'application/json' } });
+    }
+    // État du réveil du matin (heure et code de la dernière tentative, sans données personnelles).
+    if (request.method === 'GET' && new URL(request.url).pathname === '/health' && env.CLAIR) {
+      return new Response(JSON.stringify({ kick: await env.CLAIR.get('kick:last', 'json'), token: !!env.GH_DISPATCH_TOKEN }), { headers: { 'Content-Type': 'application/json' } });
     }
     if (!ALLOWED_ORIGINS.includes(origin)) return new Response('Forbidden', { status: 403 });
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors(origin) });
