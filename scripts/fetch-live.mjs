@@ -9,14 +9,22 @@ const get = async (path) => {
   return res;
 };
 
-try {
-  await fs.writeFile('docs/edition.json', Buffer.from(await (await get('edition.json')).arrayBuffer()));
-  console.log('✓ édition');
-} catch (e) {
-  console.log(`✗ pas d'édition en ligne (${e.message})`);
+// --json-only : seulement l'édition et les flashs ; --audio-only : seulement le journal audio.
+const jsonOnly = process.argv.includes('--json-only');
+const audioOnly = process.argv.includes('--audio-only');
+
+if (!audioOnly) {
+  for (const f of ['edition.json', 'flash.json']) {
+    try {
+      await fs.writeFile(`docs/${f}`, Buffer.from(await (await get(f)).arrayBuffer()));
+      console.log(`✓ ${f}`);
+    } catch (e) {
+      console.log(`– pas de ${f} en ligne (${e.message})`);
+    }
+  }
 }
 
-for (const lang of ['fr', 'en']) {
+for (const lang of jsonOnly ? [] : ['fr', 'en']) {
   let manifest;
   try { manifest = await (await get(`audio/${lang}.json`)).json(); } catch { console.log(`– pas d'audio ${lang}`); continue; }
   await fs.mkdir(`docs/audio/${lang}`, { recursive: true });

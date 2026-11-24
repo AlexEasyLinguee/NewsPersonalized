@@ -13,6 +13,12 @@ on:
     - cron: '41 4 * * *'
     - cron: '13 6 * * *'
   workflow_dispatch:
+    inputs:
+      mode:
+        description: "edition : édition complète ; flash : infos importantes parues depuis l'édition du matin"
+        type: choice
+        options: [edition, flash]
+        default: edition
   push:
     branches: [main]
     paths-ignore: ['worker/**', '.github/workflows/worker.yml', 'README.md']
@@ -62,9 +68,54 @@ jobs:
         with:
           artifact_name: pages-app-${{ github.run_attempt }}
 
+  # ---------- Flashs (lancés par le relais à 10 h, 13 h, 16 h et 19 h) ----------
+  flash:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'flash'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install --no-audit --no-fund
+      - name: Reprendre l'édition et les flashs en ligne
+        run: node scripts/fetch-live.mjs --json-only
+      - name: Chercher les infos importantes parues depuis ce matin
+        id: flash
+        run: node scripts/build.mjs
+        env:
+          FLASH: '1'
+          AI_BUDGET_MIN: '15'
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      - name: Reprendre le journal audio en ligne
+        if: steps.flash.outputs.changed == 'true'
+        run: node scripts/fetch-live.mjs --audio-only
+      - if: steps.flash.outputs.changed == 'true'
+        uses: actions/configure-pages@v5
+      - if: steps.flash.outputs.changed == 'true'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs
+          name: pages-flash-${{ github.run_attempt }}
+      - id: deployment
+        if: steps.flash.outputs.changed == 'true'
+        continue-on-error: true
+        uses: actions/deploy-pages@v4
+        with:
+          artifact_name: pages-flash-${{ github.run_attempt }}
+      - if: steps.flash.outputs.changed == 'true' && steps.deployment.outcome == 'failure'
+        run: sleep 45
+      - if: steps.flash.outputs.changed == 'true' && steps.deployment.outcome == 'failure'
+        uses: actions/deploy-pages@v4
+        with:
+          artifact_name: pages-flash-${{ github.run_attempt }}
+
   # ---------- Nouvelle édition ----------
   check:
-    if: github.event_name != 'push'
+    if: github.event_name != 'push' && inputs.mode != 'flash'
     runs-on: ubuntu-latest
     outputs:
       skip: ${{ steps.fresh.outputs.skip }}

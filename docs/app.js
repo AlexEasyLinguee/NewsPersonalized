@@ -1,4 +1,4 @@
-import { THEMES, LEVELS, CATEGORY_LABELS, DEFAULT_SETTINGS, select, followedReason, themeOf, priorityGroups, MAX_PRIORITY } from './select.js';
+import { THEMES, LEVELS, CATEGORY_LABELS, DEFAULT_SETTINGS, select, followedReason, themeOf, priorityGroups, MAX_PRIORITY, matchGroups, sameStory } from './select.js';
 import { WORKER_URL } from './config.js';
 import { makeT } from './i18n.js';
 import { initPlayer } from './player.js';
@@ -356,9 +356,10 @@ async function disablePush() {
 // Réglages du rappel du soir envoyés au serveur. Les sujets prioritaires n'y sont gardés
 // que si le rappel est activé (sans nom, liés à l'abonnement aux notifications).
 function pushPrefs() {
-  const on = !!settings.eveningOn;
+  const on = !!settings.eveningOn || !!settings.flashAlert;
   return {
-    evening: { on, hour: settings.eveningHour || 20 },
+    evening: { on: !!settings.eveningOn, hour: settings.eveningHour || 20 },
+    flash: { on: !!settings.flashAlert },
     tz: -new Date().getTimezoneOffset(),
     priorities: on ? priorityGroups(settings).map((g) => ({ label: g.label, keywords: (g.keywords || []).slice(0, 12) })) : [],
   };
@@ -372,7 +373,7 @@ async function syncPushLang(force = true) {
   const sub = await pushSub().catch(() => null);
   if (!sub) return;
   const body = { subscription: sub.toJSON(), lang: settings.lang, token: me?.token, ...pushPrefs() };
-  const sig = JSON.stringify([body.lang, body.token, body.evening, body.tz, body.priorities]);
+  const sig = JSON.stringify([body.lang, body.token, body.evening, body.flash, body.tz, body.priorities]);
   if (!force && store.get('pushSig', '') === sig) return; // rien n'a changé : pas d'appel
   const res = await fetch(`${PUSH_BASE}/push/subscribe`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).catch(() => null);
   if (res?.ok) store.set('pushSig', sig);
@@ -410,6 +411,11 @@ function pushSection() {
           ${[18, 19, 20, 21, 22].map((h) => `<button type="button" data-eve-hour="${h}" aria-pressed="${(settings.eveningHour || 20) === h}">${h} h</button>`).join('')}
         </div>
         <p class="desc">${esc(t('eve_desc'))}</p>` : ''}
+        <div class="count-row" style="padding:12px 0 0;border:0">
+          <div><div style="font-weight:700">${esc(t('fl_alert'))}</div><div class="small">${esc(t('fl_alert_sub'))}</div></div>
+          <button type="button" class="toggle" data-flash-alert aria-pressed="${!!settings.flashAlert}">${esc(settings.flashAlert ? t('eve_on') : t('eve_off'))}</button>
+        </div>
+        ${settings.flashAlert ? `<p class="desc">${esc(t('fl_alert_desc'))}</p>` : ''}
       </div>` : ''}
     </section>`;
 }
@@ -448,10 +454,10 @@ function reasonText(item) {
   }
   return item.importance >= 8 && item.tone !== 'positive' ? t('info_major') : catLabel(item.category);
 }
-function essCard(item, i) {
+function essCard(item, i, flashLabel = '') {
   const fav = isFav(item.url);
-  return `<a class="card" href="${esc(readUrl(item))}" target="_blank" rel="noopener">
-    <div class="chips">${chipFor(item)}<span class="reason">${esc(reasonText(item))}</span>
+  return `<a class="card${flashLabel ? ' flash-card' : ''}" href="${esc(readUrl(item))}" target="_blank" rel="noopener">
+    <div class="chips">${flashLabel ? `<span class="chip flash-chip">⚡ ${esc(flashTime(item))}</span><span class="reason">${esc(flashLabel)}</span>` : `${chipFor(item)}<span class="reason">${esc(reasonText(item))}</span>`}
       <span class="ess-acts">
         <span role="button" tabindex="0" class="ess-act" data-ess-send="${i}" aria-label="${esc(t('a_send'))}">${ICONS.send}</span>
         <span role="button" tabindex="0" class="ess-act${fav ? ' on' : ''}" data-ess-fav="${i}" aria-label="${esc(t('a_save'))}" aria-pressed="${fav}">${ICONS.heart}</span>
@@ -463,6 +469,49 @@ function essCard(item, i) {
     ${readerChip(item)}
   </a>`;
 }
+/* ---------- Flashs : l'important paru depuis l'édition du matin ---------- */
+// Pour tout le monde : les infos majeures (9+). Pour chacun : ses sujets ★ (7+).
+// 3 au plus, hors série et hors progression : l'édition reste une édition qui se termine.
+let flashData = null;
+let flashSel = [];
+function computeFlash() {
+  flashSel = [];
+  if (!flashData || !edition || flashData.since !== edition.generated_at) return;
+  const prios = priorityGroups(settings);
+  const inEdition = (x) => (edition.items || []).some((e) => e.url === x.url || sameStory(e, x));
+  const out = [];
+  for (const it of flashData.items || []) {
+    if (it.fait_divers || inEdition(it)) continue;
+    const p = matchGroups(it, prios)[0];
+    const avoided = matchGroups(it, settings.avoid).length > 0;
+    if (p && it.importance >= 7) out.push({ item: it, label: t('why_prio', PL(p.label)) });
+    else if (it.importance >= 9 && !avoided && (!it.search || matchGroups(it, [...(settings.interests || []), ...(settings.keep_informed || [])]).length)) out.push({ item: it, label: t('info_major') });
+  }
+  out.sort((a, b) => b.item.importance - a.item.importance || (b.item.flash_at > a.item.flash_at ? 1 : -1));
+  flashSel = out.filter((x, k) => !out.slice(0, k).some((y) => sameStory(x.item, y.item))).slice(0, 3);
+}
+function flashTime(item) {
+  const d = new Date(item.published || item.flash_at);
+  return isNaN(d) ? t('fl_today') : d.toLocaleTimeString(t('locale'), { hour: '2-digit', minute: '2-digit' });
+}
+function renderFlash() {
+  const el = $('#ess-flash');
+  if (!el) return;
+  computeFlash();
+  el.innerHTML = flashSel.length ? `<h3 class="flash-title">${esc(t('fl_title'))}</h3>
+    <div class="list" style="padding:0">${flashSel.map((x, k) => essCard(x.item, `f${k}`, x.label)).join('')}</div>` : '';
+}
+async function loadFlash() {
+  try {
+    const res = await fetch(`flash.json?t=${Date.now()}`, { cache: 'no-store' });
+    if (!res.ok) return;
+    const next = await res.json();
+    if (next.generated_at === flashData?.generated_at) return;
+    flashData = next;
+    renderFlash();
+  } catch { /* pas de flash */ }
+}
+
 function renderEssentiel() {
   if (!edition) return;
   const d = new Date(edition.generated_at);
@@ -473,6 +522,7 @@ function renderEssentiel() {
   $('#ess-later').innerHTML = laterBlock();
   $('#ess-stale').innerHTML = !navigator.onLine ? `<div class="stale offline">${esc(t('offline_banner', date.toLowerCase()))}</div>`
     : ageH > 30 ? `<div class="stale">${esc(t('stale'))}</div>` : '';
+  renderFlash();
   $('#ess-list').innerHTML = sel.essentiel.map((it, i) => essCard(it, i)).join('') || `<div class="empty">${esc(t('ess_empty'))}</div>`;
   $('#go-fil').innerHTML = `${esc(t('go_fil', sel.fil.length))} ${ICONS.arrow}`;
   renderListenButton();
@@ -597,7 +647,8 @@ document.addEventListener('click', (e) => {
   if (!b) return;
   e.preventDefault();
   e.stopPropagation();
-  const item = sel.essentiel[Number(b.dataset.essFav ?? b.dataset.essSend)];
+  const key = String(b.dataset.essFav ?? b.dataset.essSend);
+  const item = key.startsWith('f') ? flashSel[Number(key.slice(1))]?.item : sel.essentiel[Number(key)];
   if (!item) return;
   if (b.dataset.essFav !== undefined) toggleFav(item, b);
   else openSendSheet(item);
@@ -791,6 +842,12 @@ $('#settings').addEventListener('click', (e) => {
   if (b.hasAttribute('data-edit-profile')) return show('profil');
   if (b.dataset.topicKind) { topicKind = b.dataset.topicKind; document.querySelectorAll('[data-topic-kind]').forEach((x) => x.setAttribute('aria-pressed', String(x === b))); return; }
   if (b.hasAttribute('data-push')) return togglePush(b, renderSettings);
+  if (b.hasAttribute('data-flash-alert')) {
+    settings.flashAlert = !settings.flashAlert;
+    if (settings.flashAlert && !priorityGroups(settings).length) toast(t('eve_no_prio'));
+    saveSettings();
+    return renderSettings();
+  }
   if (b.hasAttribute('data-evening')) {
     settings.eveningOn = !settings.eveningOn;
     if (settings.eveningOn && !priorityGroups(settings).length) toast(t('eve_no_prio'));
@@ -1420,6 +1477,7 @@ async function load() {
     computeSel();
     renderEssentiel();
     renderFeed();
+    loadFlash();
     setTimeout(() => precacheEdition(false), 1500); // garde les photos du jour pour le hors-ligne
     setTimeout(pruneArticles, 2000);
     setTimeout(() => player.precache(), 4000); // résumés audio du jour, pour l'écoute hors ligne
@@ -1436,6 +1494,7 @@ async function checkNewEdition() {
   if (!edition || !navigator.onLine || document.visibilityState !== 'visible') return;
   if (Date.now() - lastEditionCheck < 60e3) return;
   lastEditionCheck = Date.now();
+  loadFlash();
   try {
     const res = await fetch(`edition.json?t=${Date.now()}`, { cache: 'no-store' });
     if (!res.ok) return;

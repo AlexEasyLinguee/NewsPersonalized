@@ -251,6 +251,10 @@
   .reader-orig { display: flex; align-items: center; justify-content: center; margin-top: 20px; padding: 0 16px; text-decoration: none; text-align: center; }
   .chip.offline-chip { align-self: flex-start; margin-top: 4px; padding: 6px 12px; color: #fff; background: var(--green); cursor: pointer; }
   .stale.offline { background: #E6EAE7; color: var(--ink); }
+  #ess-flash .flash-title { margin: 6px 20px 10px; font-size: 13px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: #B45309; }
+  #ess-flash .list { margin-bottom: 18px; }
+  .card.flash-card { box-shadow: inset 4px 0 0 #F59E0B; }
+  .chip.flash-chip { background: #FEF3C7; color: #92400E; }
   .new-edition { position: fixed; left: 0; right: 0; margin: 0 auto; width: max-content; max-width: calc(100vw - 24px); top: calc(env(safe-area-inset-top) + 12px); z-index: 30; border: 0; background: var(--dark, #0F3D32); color: #fff; padding: 11px 18px; border-radius: 999px; font: inherit; font-size: 15px; font-weight: 600; box-shadow: 0 6px 24px rgba(0,0,0,.25); white-space: nowrap; animation: ms-up .35s ease both; cursor: pointer; }
   .new-edition strong { color: #6EE7B7; margin-left: 6px; }
   .toast { position: fixed; left: 50%; bottom: calc(var(--tabs-h) + 16px); transform: translateX(-50%); background: var(--ink); color: #fff; padding: 10px 16px; border-radius: 12px; font-size: 14px; font-weight: 600; z-index: 20; max-width: 90vw; text-align: center; }
@@ -270,6 +274,7 @@
       </header>
       <div id="ess-stale"></div>
       <div id="ess-later"></div>
+      <div id="ess-flash"></div>
       <div class="list" id="ess-list"></div>
       <button class="cta" id="go-fil" type="button"></button>
     </div>

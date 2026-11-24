@@ -282,10 +282,7 @@ function clean(r, src) {
   };
 }
 
-async function main() {
-  if (!TOKEN && !process.env.MOCK_AI) throw new Error('Secret GEMINI_API_KEY manquant : ajoute ta clé Gemini dans Settings › Secrets and variables › Actions.');
-  await pickModel();
-
+async function collect() {
   // Sujets ajoutés à la main par les utilisateurs : une recherche d'actualités chacun.
   const extra = [];
   try {
@@ -305,19 +302,12 @@ async function main() {
   // On alterne les sources pour qu'aucune ne monopolise le plafond.
   const merged = [];
   for (let i = 0; i < PER_SOURCE; i++) for (const l of lists) if (l[i]) merged.push(l[i]);
+  return merged;
+}
+const titleKey = (t) => String(t || '').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 50);
 
-  const seen = new Set();
-  const items = [];
-  for (const it of merged) {
-    const key = it.title.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 50);
-    if (seen.has(key) || seen.has(it.url)) continue;
-    seen.add(key); seen.add(it.url);
-    items.push({ ...it, id: items.length + 1 });
-    if (items.length >= MAX_ITEMS) break;
-  }
-  console.log(`\n${items.length} articles à noter avec ${MODEL}`);
-  if (!items.length) throw new Error('Aucun article récupéré.');
-
+// Note une liste d'articles par lots, avec reprise des lots ratés. Renvoie [articles notés, lots en échec].
+async function scoreAll(items) {
   const byId = new Map(items.map((i) => [i.id, i]));
   const scored = [];
   const batches = [];
@@ -345,7 +335,28 @@ async function main() {
     todo = failed;
     if (overBudget() && todo.length) { console.log(`Temps maximum atteint : ${todo.length} lot(s) laissés de côté.`); break; }
   }
-  const failures = todo.length;
+  return [scored, todo.length];
+}
+
+async function main() {
+  if (!TOKEN && !process.env.MOCK_AI) throw new Error('Secret GEMINI_API_KEY manquant : ajoute ta clé Gemini dans Settings › Secrets and variables › Actions.');
+  await pickModel();
+  if (process.env.FLASH) return flash();
+  const merged = await collect();
+
+  const seen = new Set();
+  const items = [];
+  for (const it of merged) {
+    const key = titleKey(it.title);
+    if (seen.has(key) || seen.has(it.url)) continue;
+    seen.add(key); seen.add(it.url);
+    items.push({ ...it, id: items.length + 1 });
+    if (items.length >= MAX_ITEMS) break;
+  }
+  console.log(`\n${items.length} articles à noter avec ${MODEL}`);
+  if (!items.length) throw new Error('Aucun article récupéré.');
+
+  const [scored, failures] = await scoreAll(items);
   if (!scored.length) throw new Error(`Aucun article noté (${failures} lots en échec).`);
 
   const kept = scored.filter((s) => s.importance > 0 && s.fiable !== false).sort((a, b) => b.importance - a.importance);
@@ -353,6 +364,58 @@ async function main() {
   await fs.mkdir(new URL('docs/', ROOT), { recursive: true });
   await fs.writeFile(new URL('docs/edition.json', ROOT), JSON.stringify(edition));
   console.log(`\nÉdition écrite : ${kept.length} articles (${failures} lots en échec).`);
+}
+
+// ---------- Flashs : les infos importantes parues depuis l'édition du matin ----------
+// Lit docs/edition.json et docs/flash.json (ceux en ligne), note seulement les articles nouveaux,
+// et garde ceux qui comptent vraiment : l'app montre les 9+ à tout le monde, et les 7+ des sujets ★ de chacun.
+const FLASH_MIN = 7;
+const FLASH_MAX_NEW = 90;
+async function flash() {
+  const read = async (f) => { try { return JSON.parse(await fs.readFile(new URL(`docs/${f}`, ROOT), 'utf8')); } catch { return null; } };
+  const edition = await read('edition.json');
+  if (!edition?.generated_at) { console.log("Pas d'édition en ligne : pas de flash."); return output(false); }
+  const since = edition.generated_at;
+  const prev = await read('flash.json');
+  const same = prev?.since === since;
+  const checked = new Set(same ? prev.checked || [] : []);
+  const kept = same ? prev.items || [] : [];
+  const known = new Set();
+  for (const i of edition.items || []) { known.add(i.url); known.add(titleKey(i.orig_title || i.title)); known.add(titleKey(i.title_en)); }
+  const { sameStory, dedupe } = await import(new URL('docs/select.js', ROOT));
+  const cutoff = Date.parse(since) - 3600e3; // une heure de marge : certains flux datent leurs articles en avance
+
+  const merged = await collect();
+  const items = [];
+  const seen = new Set();
+  for (const it of merged) {
+    const key = titleKey(it.title);
+    if (!it.published || Date.parse(it.published) < cutoff) continue;
+    if (known.has(it.url) || known.has(key) || checked.has(it.url) || seen.has(key) || seen.has(it.url)) continue;
+    seen.add(key); seen.add(it.url);
+    items.push({ ...it, id: items.length + 1 });
+    if (items.length >= FLASH_MAX_NEW) break;
+  }
+  console.log(`\n${items.length} article(s) nouveau(x) depuis l'édition du ${since}`);
+  if (!items.length) return output(false);
+
+  const [scored] = await scoreAll(items);
+  for (const it of items) checked.add(it.url);
+  const fresh = dedupe(scored
+    .filter((x) => x.importance >= FLASH_MIN && x.fiable !== false && !x.fait_divers))
+    .filter((x) => !(edition.items || []).some((e) => sameStory(e, x)))
+    .filter((x) => !kept.some((k) => sameStory(k, x)))
+    .map((x) => ({ ...x, flash_at: new Date().toISOString() }));
+  for (const x of fresh) console.log(`  ⚡ ${x.importance}/10 ${x.title}`);
+  const all = [...kept, ...fresh].sort((a, b) => b.importance - a.importance).slice(0, 30);
+  const out = { since, generated_at: new Date().toISOString(), count: all.length, checked: [...checked].slice(-600), items: all };
+  await fs.writeFile(new URL('docs/flash.json', ROOT), JSON.stringify(out));
+  console.log(`Flash écrit : ${fresh.length} nouveau(x), ${all.length} au total.`);
+  return output(true);
+}
+// Indique au workflow s'il faut republier le site.
+async function output(changed) {
+  if (process.env.GITHUB_OUTPUT) await fs.appendFile(process.env.GITHUB_OUTPUT, `changed=${changed}\n`);
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

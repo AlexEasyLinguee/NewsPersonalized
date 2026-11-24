@@ -8,8 +8,9 @@ account_id = "6dd7866a3a8332f59c577c997242e7a1"
 
 [triggers]
 # Notification du matin : 5 h 35 et 6 h 35 UTC (l'édition sort vers 5 h 05 ; un seul envoi par édition)
-# Rappel du soir : chaque heure à la minute 7, envoyé seulement à l'heure locale choisie par chacun
-crons = ["35 5 * * *", "35 6 * * *", "7 * * * *"]
+# Chaque heure à la minute 7 : réveil de l'édition (5 h), flashs (10 h, 13 h, 16 h, 19 h), rappel du soir.
+# À la minute 37 : alerte flash à ceux qui l'ont demandée.
+crons = ["35 5 * * *", "35 6 * * *", "7,37 * * * *"]
 
 [[kv_namespaces]]
 binding = "CLAIR"

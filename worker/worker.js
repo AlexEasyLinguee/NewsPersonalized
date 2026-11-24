@@ -159,6 +159,15 @@ async function kickEdition(env) {
     const generated = res.ok ? Date.parse((await res.json()).generated_at) : 0;
     if (generated && Date.now() - generated < 10 * 3600e3) return; // déjà faite ce matin
   } catch { /* on lance quand même */ }
+  await dispatch(env, { ref: 'main' }, 'kick:last');
+}
+// Flashs : à 10 h, 13 h, 16 h et 19 h (heure de Paris en hiver), les infos importantes parues depuis le matin.
+const FLASH_HOURS_UTC = [9, 12, 15, 18];
+async function kickFlash(env) {
+  if (!env.GH_DISPATCH_TOKEN) return;
+  await dispatch(env, { ref: 'main', inputs: { mode: 'flash' } }, 'kick:flash');
+}
+async function dispatch(env, payload, logKey) {
   const r = await fetch('https://api.github.com/repos/AlexEasyLinguee/NewsPersonalized/actions/workflows/edition.yml/dispatches', {
     method: 'POST',
     headers: {
@@ -168,12 +177,67 @@ async function kickEdition(env) {
       'User-Agent': 'clair-relais',
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ ref: 'main' }),
+    body: JSON.stringify(payload),
   });
   const msg = r.status === 204 ? 'ok' : (await r.text()).slice(0, 200);
-  console.log(`Édition lancée : HTTP ${r.status} ${msg}`);
+  console.log(`${logKey} : HTTP ${r.status} ${msg}`);
   // Gardé pour le diagnostic (lu par le workflow « Relais Cloudflare »).
-  if (env.CLAIR) await env.CLAIR.put('kick:last', JSON.stringify({ at: new Date().toISOString(), status: r.status, msg }));
+  if (env.CLAIR) await env.CLAIR.put(logKey, JSON.stringify({ at: new Date().toISOString(), status: r.status, msg }));
+}
+
+/* ---------- Alerte flash ---------- */
+const FLASH_URL = APP_URL + 'flash.json';
+const FLASH_TX = {
+  fr: { title: (t) => `⚡ ${t}`, major: 'Info majeure', prio: (l) => `★ ${l}` },
+  en: { title: (t) => `⚡ ${t}`, major: 'Major news', prio: (l) => `★ ${l}` },
+};
+// Une alerte par jour au plus, entre 7 h et 22 h (heure locale), pour une info majeure (9+)
+// ou un sujet ★ de la personne (7+), à ceux qui l'ont activée.
+async function notifyFlash(env) {
+  let flash, edition;
+  try {
+    const [f, e] = await Promise.all([fetch(`${FLASH_URL}?t=${Date.now()}`, { cf: { cacheTtl: 0 } }), fetch(`${EDITION_URL}?t=${Date.now()}`, { cf: { cacheTtl: 0 } })]);
+    if (!f.ok || !e.ok) return;
+    [flash, edition] = [await f.json(), await e.json()];
+  } catch { return; }
+  if (flash.since !== edition.generated_at || !(flash.items || []).length) return;
+  const now = Date.now();
+  const vapid = await getVapid(env);
+  let cursor;
+  do {
+    const page = await env.CLAIR.list({ prefix: 'sub:', cursor });
+    for (const k of page.keys) {
+      const rec = await env.CLAIR.get(k.name, 'json');
+      if (!rec?.flash?.on) continue;
+      const local = now + (rec.tz || 0) * 60e3;
+      const hour = new Date(local).getUTCHours();
+      const today = localDay(local);
+      if (hour < 7 || hour >= 22 || rec.lastFlash === today) continue;
+      const sent = new Set(rec.flashSent || []);
+      let pick = null;
+      for (const it of flash.items) {
+        if (sent.has(it.url)) continue;
+        const text = nrm([...(it.tags || []), it.title, it.summary, it.title_en, it.summary_en, it.orig_title].join(' '));
+        const g = (rec.priorities || []).find((p) => (p.keywords || []).some((kw) => { const w = nrm(kw); return w.trim() && text.includes(w); }));
+        const ok = it.importance >= 9 || (g && it.importance >= 7);
+        if (ok && (!pick || it.importance > pick.it.importance)) pick = { it, g };
+      }
+      if (!pick) continue;
+      const lang = rec.lang === 'en' ? 'en' : 'fr';
+      const tx = FLASH_TX[lang];
+      const title = (lang === 'en' && pick.it.title_en) || pick.it.title;
+      const summary = (lang === 'en' && pick.it.summary_en) || pick.it.summary || '';
+      const label = pick.g ? tx.prio(pick.g.label) : tx.major;
+      try {
+        const status = await sendPush(rec.sub, { title: tx.title(title), body: `${label} · ${summary}`.slice(0, 180), url: APP_URL }, vapid, PUSH_SUBJECT);
+        if (status === 404 || status === 410) { await env.CLAIR.delete(k.name); continue; }
+        rec.lastFlash = today;
+        rec.flashSent = [...sent, pick.it.url].slice(-30);
+        await env.CLAIR.put(k.name, JSON.stringify(rec));
+      } catch { /* suivant */ }
+    }
+    cursor = page.list_complete ? undefined : page.cursor;
+  } while (cursor);
 }
 
 /* ---------- Rappel du soir ---------- */
@@ -298,7 +362,9 @@ async function handlePush(path, request, env, origin) {
     if (body.evening) rec.evening = { on: !!body.evening.on, hour: Math.min(23, Math.max(0, Number(body.evening.hour) || 20)) };
     if (Number.isFinite(Number(body.tz))) rec.tz = Math.max(-720, Math.min(840, Math.round(Number(body.tz))));
     // Sujets prioritaires : gardés seulement si le rappel du soir est activé.
-    if (Array.isArray(body.priorities)) rec.priorities = rec.evening?.on ? cleanGroups(body.priorities, 5) : [];
+    if (body.flash) rec.flash = { on: !!body.flash.on };
+    // Sujets prioritaires : gardés seulement si le rappel du soir ou l'alerte flash est activé.
+    if (Array.isArray(body.priorities)) rec.priorities = rec.evening?.on || rec.flash?.on ? cleanGroups(body.priorities, 5) : [];
     if (rec.evening?.on && !old.evening?.on) rec.ignored = 0;
     await env.CLAIR.put(key, JSON.stringify(rec));
     if (body.test) {
@@ -422,7 +488,7 @@ export default {
     }
     // État du réveil du matin (heure et code de la dernière tentative, sans données personnelles).
     if (request.method === 'GET' && new URL(request.url).pathname === '/health' && env.CLAIR) {
-      return new Response(JSON.stringify({ kick: await env.CLAIR.get('kick:last', 'json'), token: !!env.GH_DISPATCH_TOKEN }), { headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({ kick: await env.CLAIR.get('kick:last', 'json'), flash: await env.CLAIR.get('kick:flash', 'json'), token: !!env.GH_DISPATCH_TOKEN }), { headers: { 'Content-Type': 'application/json' } });
     }
     if (!ALLOWED_ORIGINS.includes(origin)) return new Response('Forbidden', { status: 403 });
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors(origin) });
@@ -494,11 +560,18 @@ export default {
     return handleProfile(request, env, origin);
   },
   async scheduled(event, env, ctx) {
-    if (event.cron === '7 * * * *') {
-      // 4 h 07 UTC (5 h 07 à Paris l'hiver) : on lance l'édition du jour ; 5 h 07 : nouvel essai si elle n'est pas sortie.
-      const h = new Date().getUTCHours();
-      if (h === 4 || h === 5) ctx.waitUntil(kickEdition(env));
-      if (env.CLAIR) ctx.waitUntil(notifyEvening(env));
+    if (event.cron === '7,37 * * * *') {
+      const now = new Date();
+      const h = now.getUTCHours();
+      if (now.getUTCMinutes() < 30) {
+        // 4 h 07 UTC (5 h 07 à Paris l'hiver) : on lance l'édition du jour ; 5 h 07 : nouvel essai si elle n'est pas sortie.
+        if (h === 4 || h === 5) ctx.waitUntil(kickEdition(env));
+        if (FLASH_HOURS_UTC.includes(h)) ctx.waitUntil(kickFlash(env));
+        if (env.CLAIR) ctx.waitUntil(notifyEvening(env));
+      } else if (env.CLAIR) {
+        // Une demi-heure plus tard, les flashs sont en ligne : alerte à ceux qui l'ont demandée.
+        ctx.waitUntil(notifyFlash(env));
+      }
     } else if (env.CLAIR) ctx.waitUntil(notifyMorning(env));
   },
 };
