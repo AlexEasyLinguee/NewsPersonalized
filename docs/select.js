@@ -79,12 +79,27 @@ function textOf(item) {
 }
 
 // Groupes (intérêts, à suivre, à éviter) dont un mot-clé apparaît dans l'article.
-export function matchGroups(item, groups) {
+// Par défaut, un mot-clé seul et court ne suffit pas (« piste » dans « sur la piste de Surcouf » n'est pas du ski) :
+// il faut le nom du sujet, un mot-clé dans les thèmes de l'article choisis par l'IA, une expression de
+// plusieurs mots, un mot-clé long et précis (8 lettres ou plus), ou deux mots-clés différents.
+// loose = un seul mot-clé suffit (pour « à éviter » : mieux vaut écarter un article de trop).
+export function matchGroups(item, groups, loose = false) {
   const t = textOf(item);
-  return (groups || []).filter((g) => (g.keywords || []).some((k) => {
-    const kw = words(k);
-    return kw.trim() && t.includes(kw);
-  }));
+  const tags = words((item.tags || []).join(' '));
+  return (groups || []).filter((g) => {
+    const kws = (g.keywords || []).map(words).filter((k) => k.trim());
+    if (loose) return kws.some((k) => t.includes(k));
+    const label = words(g.label);
+    if (label.trim() && t.includes(label)) return true;
+    let n = 0;
+    for (const k of kws) {
+      if (!t.includes(k)) continue;
+      const w = k.trim();
+      if (tags.includes(k) || w.includes(' ') || w.length >= 8) return true;
+      if (++n >= 2) return true;
+    }
+    return false;
+  });
 }
 
 // --- Doublons : la même histoire racontée par plusieurs médias ---
@@ -139,13 +154,15 @@ export function followedReason(item, s) {
 // Sujets prioritaires : ceux marqués d'une étoile parmi « Ce que tu aimes » et « À savoir même si c'est grave ».
 export const priorityGroups = (s) => [...(s.interests || []), ...(s.keep_informed || [])].filter((g) => g.priority);
 export const MAX_PRIORITY = 5;
+const TOPIC_CAP = 3; // cartes au plus par sujet suivi dans le fil
+const PRIO_CAP = 4;  // cartes ★ au plus en tout
 
 export function select(edition, s) {
-  const avoided = (i) => i.importance < 9 && matchGroups(i, s.avoid).length > 0;
+  const avoided = (i) => i.importance < 9 && matchGroups(i, s.avoid, true).length > 0;
   const prios = priorityGroups(s);
   // Articles venus de la recherche d'un sujet ajouté par quelqu'un : seulement pour ceux qui le suivent.
   const mine = [...(s.interests || []), ...(s.keep_informed || [])];
-  const forMe = (i) => !i.search || matchGroups(i, mine).length > 0;
+  const forMe = (i) => !i.search || matchGroups(i, mine, true).length > 0;
   const items = dedupe((edition.items || []).filter((i) => !i.fait_divers && !avoided(i) && forMe(i)));
   const threshold = s.level === 'full' ? 6 : 8;
 
@@ -162,15 +179,25 @@ export function select(edition, s) {
 
   // 2. Le fil : bonnes nouvelles et infos neutres utiles, dans tes thèmes ou tes centres d'intérêt.
   // 2 bis. Sujets prioritaires : toujours en tête du fil, même quand la nouvelle est neutre ou mauvaise.
+  // Au plus 3 cartes par sujet suivi dans tout le fil, et 4 cartes ★ en tout, réparties (1re, 4e, 7e, 10e place).
+  const followed = [...(s.interests || []), ...(s.keep_informed || [])];
+  const perTopic = new Map();
+  const full = (labels) => labels.some((l) => (perTopic.get(l) || 0) >= TOPIC_CAP);
+  const take = (labels) => labels.forEach((l) => perTopic.set(l, (perTopic.get(l) || 0) + 1));
   const top = [];
   for (const i of items) {
     if (used.has(i.id) || i.importance < 2) continue;
     const p = matchGroups(i, prios)[0];
-    if (p) top.push({ ...i, why: p.label, prio: true, score: i.importance });
+    if (p) top.push({ ...i, why: p.label, prio: true, score: i.importance, labels: matchGroups(i, followed).map((g) => g.label) });
   }
   top.sort((a, b) => b.score - a.score);
-  const prioFil = top.slice(0, MAX_PRIORITY + 3);
-  prioFil.forEach((i) => used.add(i.id));
+  const prioFil = [];
+  for (const i of top) {
+    if (prioFil.length >= PRIO_CAP || full(i.labels)) continue;
+    prioFil.push(i);
+    take(i.labels);
+    used.add(i.id);
+  }
 
   const pool = [];
   for (const i of items) {
@@ -183,6 +210,7 @@ export function select(edition, s) {
       ...i,
       score: i.importance + 4 * Math.min(2, loves.length),
       why: loves.length ? loves[0].label : '',
+      labels: loves.map((g) => g.label),
       group: loves.length ? `i:${loves[0].label}` : `t:${themeOf(i.category)}`,
     });
   }
@@ -194,11 +222,19 @@ export function select(edition, s) {
     if (!groups.has(i.group)) groups.set(i.group, []);
     groups.get(i.group).push(i);
   }
-  const fil = [...prioFil];
-  while (fil.length < s.count && [...groups.values()].some((g) => g.length)) {
+  const rest = [];
+  const target = s.count - prioFil.length;
+  while (rest.length < target && [...groups.values()].some((g) => g.length)) {
     for (const g of groups.values()) {
-      if (g.length && fil.length < s.count) fil.push(g.shift());
+      if (!g.length || rest.length >= target) continue;
+      const i = g.shift();
+      if (full(i.labels)) continue;
+      take(i.labels);
+      rest.push(i);
     }
   }
+  const fil = [];
+  prioFil.forEach((p, k) => { fil.push(p, ...rest.splice(0, k === prioFil.length - 1 ? 0 : 2)); });
+  fil.push(...rest);
   return { essentiel, fil };
 }

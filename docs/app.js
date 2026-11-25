@@ -483,9 +483,9 @@ function computeFlash() {
   for (const it of flashData.items || []) {
     if (it.fait_divers || inEdition(it)) continue;
     const p = matchGroups(it, prios)[0];
-    const avoided = matchGroups(it, settings.avoid).length > 0;
+    const avoided = matchGroups(it, settings.avoid, true).length > 0;
     if (p && it.importance >= 7) out.push({ item: it, label: t('why_prio', PL(p.label)) });
-    else if (it.importance >= 9 && !avoided && (!it.search || matchGroups(it, [...(settings.interests || []), ...(settings.keep_informed || [])]).length)) out.push({ item: it, label: t('info_major') });
+    else if (it.importance >= 9 && !avoided && (!it.search || matchGroups(it, [...(settings.interests || []), ...(settings.keep_informed || [])], true).length)) out.push({ item: it, label: t('info_major') });
   }
   out.sort((a, b) => b.item.importance - a.item.importance || (b.item.flash_at > a.item.flash_at ? 1 : -1));
   flashSel = out.filter((x, k) => !out.slice(0, k).some((y) => sameStory(x.item, y.item))).slice(0, 3);

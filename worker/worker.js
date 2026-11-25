@@ -217,8 +217,7 @@ async function notifyFlash(env) {
       let pick = null;
       for (const it of flash.items) {
         if (sent.has(it.url)) continue;
-        const text = nrm([...(it.tags || []), it.title, it.summary, it.title_en, it.summary_en, it.orig_title].join(' '));
-        const g = (rec.priorities || []).find((p) => (p.keywords || []).some((kw) => { const w = nrm(kw); return w.trim() && text.includes(w); }));
+        const g = (rec.priorities || []).find((p) => strongMatch(it, p));
         const ok = it.importance >= 9 || (g && it.importance >= 7);
         if (ok && (!pick || it.importance > pick.it.importance)) pick = { it, g };
       }
@@ -242,17 +241,32 @@ async function notifyFlash(env) {
 
 /* ---------- Rappel du soir ---------- */
 const nrm = (x) => ` ${String(x ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()} `;
+// Un article touche-t-il ce sujet ? Mêmes règles que l'app : le nom du sujet, un mot-clé dans les thèmes
+// de l'article, une expression, un mot-clé long (8 lettres ou plus), ou deux mots-clés différents.
+function strongMatch(item, g) {
+  const text = nrm([...(item.tags || []), item.title, item.summary, item.title_en, item.summary_en, item.orig_title].join(' '));
+  const tags = nrm((item.tags || []).join(' '));
+  const label = nrm(g.label);
+  if (label.trim() && text.includes(label)) return true;
+  let n = 0;
+  for (const kw of g.keywords || []) {
+    const k = nrm(kw);
+    if (!k.trim() || !text.includes(k)) continue;
+    if (tags.includes(k) || k.trim().includes(' ') || k.trim().length >= 8) return true;
+    if (++n >= 2) return true;
+  }
+  return false;
+}
 // Combien d'histoires du jour touchent chaque sujet prioritaire (mêmes règles que l'app).
 function priorityHits(edition, priorities) {
   const items = (edition.items || []).filter((i) => !i.fait_divers && i.importance >= 2);
-  const texts = items.map((i) => nrm([...(i.tags || []), i.title, i.summary, i.title_en, i.summary_en].join(' ')));
   const hits = [];
   const seen = new Set();
   for (const g of priorities || []) {
     let n = 0;
-    texts.forEach((txt, k) => {
+    items.forEach((it, k) => {
       if (seen.has(k)) return;
-      if ((g.keywords || []).some((kw) => { const w = nrm(kw); return w.trim() && txt.includes(w); })) { n++; seen.add(k); }
+      if (strongMatch(it, g)) { n++; seen.add(k); }
     });
     if (n) hits.push({ label: g.label, n });
   }
